@@ -28,10 +28,11 @@ extern Oid DefineIndex(Oid relationId,
 			bool check_rights,
 			bool skip_build,
 			bool quiet);
-extern Oid	ReindexIndex(RangeVar *indexRelation);
-extern Oid	ReindexTable(RangeVar *relation);
+extern Oid	ReindexIndex(RangeVar *indexRelation, bool concurrent);
+extern Oid	ReindexTable(RangeVar *relation, bool concurrent);
 extern Oid ReindexDatabase(const char *databaseName,
-				bool do_system, bool do_user);
+							bool do_system, bool do_user, bool concurrent);
+extern bool ReindexRelationConcurrently(Oid relOid);
 extern char *makeObjectName(const char *name1, const char *name2,
 			   const char *label);
 extern char *ChooseRelationName(const char *name1, const char *name2,

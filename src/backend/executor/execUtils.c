@@ -1201,6 +1201,20 @@ check_exclusion_constraint(Relation heap, Relation index, IndexInfo *indexInfo,
 	}
 
 	/*
+	 * As an invalid index only exists when created in a concurrent context,
+	 * and that this code path cannot be taken by CREATE INDEX CONCURRENTLY
+	 * as this feature is not available for exclusion constraints, this code
+	 * path can only be taken by REINDEX CONCURRENTLY. In this case the same
+	 * index exists in parallel to this one so we can bypass this check as
+	 * it has already been done on the other index existing in parallel.
+	 * If exclusion constraints are supported in the future for CREATE INDEX
+	 * CONCURRENTLY, this should be removed or completed especially for this
+	 * purpose.
+	 */
+	if (!index->rd_index->indisvalid)
+		return true;
+
+	/*
 	 * Search the tuples that are in the index for any violations, including
 	 * tuples that aren't visible yet.
 	 */

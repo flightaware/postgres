@@ -864,7 +864,8 @@ ERROR:  could not serialize access due to read/write dependencies among transact
 
         <para>
          Acquired by <command>VACUUM</command> (without <option>FULL</option>),
-         <command>ANALYZE</>, <command>CREATE INDEX CONCURRENTLY</>, and
+         <command>ANALYZE</>, <command>CREATE INDEX CONCURRENTLY</>,
+         <command>REINDEX CONCURRENTLY</>,
          <command>ALTER TABLE VALIDATE</command> and other
          <command>ALTER TABLE</command> variants (for full details see
          <xref linkend="SQL-ALTERTABLE">).
@@ -1143,7 +1144,7 @@ ERROR:  could not serialize access due to read/write dependencies among transact
 
    <sect2 id="locking-pages">
     <title>Page-level Locks</title>
-  
+
     <para>
      In addition to table and row locks, page-level share/exclusive locks are
      used to control read/write access to table pages in the shared buffer

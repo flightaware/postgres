@@ -7157,35 +7157,38 @@ opt_if_exists: IF_P EXISTS						{ $$ = TRUE; }
  *
  *		QUERY:
  *
- *		REINDEX type <name> [FORCE]
+ *		REINDEX type [CONCURRENTLY] <name> [FORCE]
  *
  * FORCE no longer does anything, but we accept it for backwards compatibility
  *****************************************************************************/
 
 ReindexStmt:
-			REINDEX reindex_type qualified_name opt_force
+			REINDEX reindex_type opt_concurrently qualified_name opt_force
 				{
 					ReindexStmt *n = makeNode(ReindexStmt);
 					n->kind = $2;
-					n->relation = $3;
+					n->concurrent = $3;
+					n->relation = $4;
 					n->name = NULL;
 					$$ = (Node *)n;
 				}
-			| REINDEX SYSTEM_P name opt_force
+			| REINDEX SYSTEM_P opt_concurrently name opt_force
 				{
 					ReindexStmt *n = makeNode(ReindexStmt);
 					n->kind = OBJECT_DATABASE;
-					n->name = $3;
+					n->concurrent = $3;
+					n->name = $4;
 					n->relation = NULL;
 					n->do_system = true;
 					n->do_user = false;
 					$$ = (Node *)n;
 				}
-			| REINDEX DATABASE name opt_force
+			| REINDEX DATABASE opt_concurrently name opt_force
 				{
 					ReindexStmt *n = makeNode(ReindexStmt);
 					n->kind = OBJECT_DATABASE;
-					n->name = $3;
+					n->concurrent = $3;
+					n->name = $4;
 					n->relation = NULL;
 					n->do_system = true;
 					n->do_user = true;
