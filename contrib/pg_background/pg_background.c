@@ -817,10 +817,6 @@ pg_background_worker_main(Datum main_arg)
 static void
 execute_sql_string(const char *sql)
 {
-	List	   *raw_parsetree_list;
-	ListCell   *lc1;
-	bool		isTopLevel;
-	int			commands_remaining;
 	MemoryContext	parsecontext;
 	MemoryContext	oldcontext;
 
@@ -839,139 +835,16 @@ execute_sql_string(const char *sql)
 										 ALLOCSET_DEFAULT_MINSIZE,
 										 ALLOCSET_DEFAULT_INITSIZE,
 										 ALLOCSET_DEFAULT_MAXSIZE);
-	oldcontext = MemoryContextSwitchTo(parsecontext);
-	raw_parsetree_list = pg_parse_query(sql);
-	commands_remaining = list_length(raw_parsetree_list);
-	isTopLevel = commands_remaining == 1;
-	MemoryContextSwitchTo(oldcontext);
 
 	/*
-	 * Do parse analysis, rule rewrite, planning, and execution for each raw
-	 * parsetree.  We must fully execute each query before beginning parse
-	 * analysis on the next one, since there may be interdependencies.
+	 * Do the real work
 	 */
-	foreach(lc1, raw_parsetree_list)
-	{
-		Node	   *parsetree = (Node *) lfirst(lc1);
-		const char *commandTag;
-		char        completionTag[COMPLETION_TAG_BUFSIZE];
-		List       *querytree_list,
-				   *plantree_list;
-		bool		snapshot_set = false;
-		Portal		portal;
-		DestReceiver *receiver;
-		int16		format = 1;
-
-		/*
-		 * We don't allow transaction-control commands like COMMIT and ABORT
-		 * here.  The entire SQL statement is executed as a single transaction
-		 * which commits if no errors are encountered.
-		 */
-		if (IsA(parsetree, TransactionStmt))
-			ereport(ERROR,
-					(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-					 errmsg("transaction control statements are not allowed in pg_background")));
-
-		/*
-		 * Get the command name for use in status display (it also becomes the
-		 * default completion tag, down inside PortalRun).  Set ps_status and
-		 * do any special start-of-SQL-command processing needed by the
-		 * destination.
-		 */
-		commandTag = CreateCommandTag(parsetree);
-		set_ps_display(commandTag, false);
-		BeginCommand(commandTag, DestNone);
-
-		/* Set up a snapshot if parse analysis/planning will need one. */
-		if (analyze_requires_snapshot(parsetree))
-		{
-			PushActiveSnapshot(GetTransactionSnapshot());
-			snapshot_set = true;
-		}
-
-		/*
-		 * OK to analyze, rewrite, and plan this query.
-		 *
-		 * As with parsing, we need to make sure this data outlives the
-		 * transaction, because of the possibility that the statement might
-		 * perform internal transaction control.
-		 */
-		oldcontext = MemoryContextSwitchTo(parsecontext);
-		querytree_list = pg_analyze_and_rewrite(parsetree, sql, NULL, 0);
-		plantree_list = pg_plan_queries(querytree_list, 0, NULL);
-
-		/* Done with the snapshot used for parsing/planning */
-		if (snapshot_set)
-			PopActiveSnapshot();
-
-		/* If we got a cancel signal in analysis or planning, quit */
-		CHECK_FOR_INTERRUPTS();
-
-		/*
-		 * Execute the query using the unnamed portal.
-		 */
-		portal = CreatePortal("", true, true);
-		/* Don't display the portal in pg_cursors */
-		portal->visible = false;
-		PortalDefineQuery(portal, NULL, sql, commandTag, plantree_list, NULL);
-		PortalStart(portal, NULL, 0, InvalidSnapshot);
-
-		/* We always use binary format, for efficiency. */
-		PortalSetResultFormat(portal, 1, &format);
-
-		/*
-		 * Tuples returned by any command other than the last are simply
-		 * discarded; but those returned by the last (or only) command are
-		 * redirected to the shared memory queue we're using for communication
-		 * with the launching backend. If the launching backend is gone or has
-		 * detached us, these messages will just get dropped on the floor.
-		 */
-		--commands_remaining;
-		if (commands_remaining > 0)
-			receiver = CreateDestReceiver(DestNone);
-		else
-		{
-			receiver = CreateDestReceiver(DestRemote);
-			SetRemoteDestReceiverParams(receiver, portal);
-		}
-
-		/*
-		 * Only once the portal and destreceiver have been established can
-		 * we return to the transaction context.  All that stuff needs to
-		 * survive an internal commit inside PortalRun!
-		 */
-		MemoryContextSwitchTo(oldcontext);
-
-		/* Here's where we actually execute the command. */
-		(void) PortalRun(portal, FETCH_ALL, isTopLevel, receiver, receiver,
-						 completionTag);
-
-		/* Clean up the receiver. */
-		(*receiver->rDestroy) (receiver);
-
-		/* Clean up the portal. */
-		PortalDrop(portal, false);
-
-		/*
-		 * If this is the last parsetree, close down transaction statement
-		 * before reporting CommandComplete.  Otherwise, we need a
-		 * CommandCounterIncrement.
-		 */
-		if (lnext(lc1) == NULL)
-			finish_xact_command();
-		else
-			CommandCounterIncrement();
-
-		/*
-		 * Send a CommandComplete message even if we suppressed the query
-		 * results.  The user backend will report the command tags in the
-		 * absence of any true query results.
-		 */
-		EndCommand(completionTag, DestRemote);
-	}
-
-	/* Make sure there's not still a transaction open. */
-	finish_xact_command();
+	exec_query_string(query_string,
+					  DestRemote,
+					  &parsecontext,
+					  true, /* allow_transactions */
+					  true /* last_result_only */
+					  );
 }
 
 /*
