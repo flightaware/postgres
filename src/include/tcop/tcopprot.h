@@ -86,4 +86,11 @@ extern bool set_plan_disabling_options(const char *arg,
 						   GucContext context, GucSource source);
 extern const char *get_stats_option_name(const char *arg);
 
+extern void exec_query_string(const char *query_string,
+                  CommandDest dest, /* Where to send output */
+                  MemoryContext parsecontext, /* Context we should use to parse query_string */
+                  bool allow_transactions, /* Should we allow transaction statements? */
+                  bool last_result_only /* If true, drop all command output except for the last command */
+                  );
+
 #endif   /* TCOPPROT_H */
