@@ -842,38 +842,10 @@ exec_simple_query(const char *query_string)
 	if (save_log_statement_stats)
 		ResetUsage();
 
-	/*
-	 * Do the real work
-	 */
-	exec_query_string(query_string,
-					  dest,
-					  MessageContext,
-					  true, /* allow_transactions */
-					  false /* last_result_only */
-					  );
+				  MemoryContext parsecontext = MessageContext;
+				  bool allow_transactions = true;
+				  bool last_result_only = false;
 
-	if (save_log_statement_stats)
-		ShowUsage("QUERY STATISTICS");
-
-	TRACE_POSTGRESQL_QUERY_DONE(query_string);
-
-	debug_query_string = NULL;
-}
-
-/*
- * exec_query_string
- *
- * This is the guts of exec_simply_query, but is also used by
- * execute_sql_string in contrib/pg_background
- */
-void
-exec_query_string(const char *query_string,
-				  CommandDest dest, /* Where to send output */
-				  MemoryContext parsecontext, /* Context we should use to parse query_string */
-				  bool allow_transactions, /* Should we allow transaction statements? */
-				  bool last_result_only /* If true, drop all command output except for the last command */
-				  )
-{
 	MemoryContext oldcontext;
 	List	   *parsetree_list;
 	ListCell   *parsetree_item;
@@ -1176,6 +1148,13 @@ exec_query_string(const char *query_string,
 			break;
 	}
 
+
+	if (save_log_statement_stats)
+		ShowUsage("QUERY STATISTICS");
+
+	TRACE_POSTGRESQL_QUERY_DONE(query_string);
+
+	debug_query_string = NULL;
 }
 
 /*
