@@ -745,10 +745,7 @@ lazy_scan_heap(Relation onerel, LVRelStats *vacrelstats,
 						RelationGetRelationName(onerel),
 						vacrelstats->tuples_deleted, vacuumed_pages)));
 
-	/*
-	 * Note: Only one of these can be true
-	 */
-	if (retry_page_count)
+	if (retry_page_count || retry_fail_count || retry_pages_skipped)
 		ereport(elevel,
 				(errmsg("\"%s\": found %.0f removable, %.0f nonremovable row versions in %u out of %u pages",
 						RelationGetRelationName(onerel),
