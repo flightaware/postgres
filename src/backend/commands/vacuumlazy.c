@@ -105,6 +105,8 @@ typedef struct LVRelStats
 	BlockNumber old_rel_pages;	/* previous value of pg_class.relpages */
 	BlockNumber rel_pages;		/* total number of pages */
 	BlockNumber scanned_pages;	/* number of pages we examined */
+	/* number of pages we could not initiall get lock on */
+	BlockNumber	nolock;
 	double		scanned_tuples; /* counts only tuples on scanned pages */
 	double		old_rel_tuples; /* previous value of pg_class.reltuples */
 	double		new_rel_tuples; /* new estimated total # of tuples */
@@ -343,27 +345,52 @@ lazy_vacuum_rel(Relation onerel, VacuumStmt *vacstmt,
 				write_rate = (double) BLCKSZ *VacuumPageDirty / (1024 * 1024) /
 							(secs + usecs / 1000000.0);
 			}
-			ereport(LOG,
-					(errmsg("automatic vacuum of table \"%s.%s.%s\": index scans: %d\n"
-							"pages: %d removed, %d remain\n"
-							"tuples: %.0f removed, %.0f remain, %.0f are dead but not yet removable\n"
-							"buffer usage: %d hits, %d misses, %d dirtied\n"
-					  "avg read rate: %.3f MB/s, avg write rate: %.3f MB/s\n"
-							"system usage: %s",
-							get_database_name(MyDatabaseId),
-							get_namespace_name(RelationGetNamespace(onerel)),
-							RelationGetRelationName(onerel),
-							vacrelstats->num_index_scans,
-							vacrelstats->pages_removed,
-							vacrelstats->rel_pages,
-							vacrelstats->tuples_deleted,
-							vacrelstats->new_rel_tuples,
-							vacrelstats->new_dead_tuples,
-							VacuumPageHit,
-							VacuumPageMiss,
-							VacuumPageDirty,
-							read_rate, write_rate,
-							pg_rusage_show(&ru0))));
+			if (vacrelstats->nolock > 0)
+				ereport(LOG,
+						(errmsg("automatic vacuum of table \"%s.%s.%s\": index scans: %d\n"
+								"pages: %d removed, %d remain\n"
+							    "%s cleanup lock on %u pages.\n"
+								"tuples: %.0f removed, %.0f remain, %.0f are dead but not yet removable\n"
+								"buffer usage: %d hits, %d misses, %d dirtied\n"
+						  "avg read rate: %.3f MB/s, avg write rate: %.3f MB/s\n"
+								"system usage: %s",
+								get_database_name(MyDatabaseId),
+								get_namespace_name(RelationGetNamespace(onerel)),
+								RelationGetRelationName(onerel),
+								vacrelstats->num_index_scans,
+								vacrelstats->pages_removed,
+								vacrelstats->rel_pages,
+							    scan_all ? "Waited for" : "Could not acquire", vacrelstats->nolock,
+								vacrelstats->tuples_deleted,
+								vacrelstats->new_rel_tuples,
+								vacrelstats->new_dead_tuples,
+								VacuumPageHit,
+								VacuumPageMiss,
+								VacuumPageDirty,
+								read_rate, write_rate,
+								pg_rusage_show(&ru0))));
+			else
+				ereport(LOG,
+						(errmsg("automatic vacuum of table \"%s.%s.%s\": index scans: %d\n"
+								"pages: %d removed, %d remain\n"
+								"tuples: %.0f removed, %.0f remain, %.0f are dead but not yet removable\n"
+								"buffer usage: %d hits, %d misses, %d dirtied\n"
+						  "avg read rate: %.3f MB/s, avg write rate: %.3f MB/s\n"
+								"system usage: %s",
+								get_database_name(MyDatabaseId),
+								get_namespace_name(RelationGetNamespace(onerel)),
+								RelationGetRelationName(onerel),
+								vacrelstats->num_index_scans,
+								vacrelstats->pages_removed,
+								vacrelstats->rel_pages,
+								vacrelstats->tuples_deleted,
+								vacrelstats->new_rel_tuples,
+								vacrelstats->new_dead_tuples,
+								VacuumPageHit,
+								VacuumPageMiss,
+								VacuumPageDirty,
+								read_rate, write_rate,
+								pg_rusage_show(&ru0))));
 		}
 	}
 }
@@ -611,6 +638,8 @@ lazy_scan_heap(Relation onerel, LVRelStats *vacrelstats,
 		/* We need buffer cleanup lock so that we can prune HOT chains. */
 		if (!ConditionalLockBufferForCleanup(buf))
 		{
+			vacrelstats->nolock++;
+
 			/*
 			 * If we're not scanning the whole relation to guard against XID
 			 * wraparound, it's OK to skip vacuuming a page.  The next vacuum
@@ -1101,10 +1130,12 @@ lazy_scan_heap(Relation onerel, LVRelStats *vacrelstats,
 					vacrelstats->scanned_pages, nblocks),
 			 errdetail("%.0f dead row versions cannot be removed yet.\n"
 					   "There were %.0f unused item pointers.\n"
+					   "%s cleanup lock on %u pages.\n"
 					   "%u pages are entirely empty.\n"
 					   "%s.",
 					   nkeep,
 					   nunused,
+					   scan_all ? "Waited for" : "Could not acquire", vacrelstats->nolock,
 					   empty_pages,
 					   pg_rusage_show(&ru0))));
 }
