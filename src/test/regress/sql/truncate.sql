@@ -251,6 +251,9 @@ begin
     perform pg_stat_clear_snapshot();
 
   end loop;
+  IF NOT updated THEN
+    RAISE WARNING 'stats update never happened';
+  END IF;
 
   TRUNCATE prevstats;  -- what a pun
   INSERT INTO prevstats SELECT newstats.*;
@@ -309,6 +312,21 @@ RELEASE SAVEPOINT p1;
 COMMIT;
 
 SELECT pg_sleep(0.5);
+SELECT * FROM wait_for_trunc_test_stats();
+
+-- now to use a savepoint: this should only count 2 inserts and have 3
+-- live tuples after commit
+BEGIN;
+INSERT INTO trunc_stats_test DEFAULT VALUES;
+INSERT INTO trunc_stats_test DEFAULT VALUES;
+SAVEPOINT p1;
+INSERT INTO trunc_stats_test DEFAULT VALUES;
+INSERT INTO trunc_stats_test DEFAULT VALUES;
+TRUNCATE trunc_stats_test;
+INSERT INTO trunc_stats_test DEFAULT VALUES;
+ROLLBACK TO SAVEPOINT p1;
+COMMIT;
+
 SELECT * FROM wait_for_trunc_test_stats();
 
 DROP TABLE prevstats CASCADE;
