@@ -215,3 +215,101 @@ SELECT * FROM truncate_a;
 DROP TABLE truncate_a;
 
 SELECT nextval('truncate_a_id1'); -- fail, seq should have been dropped
+
+-- test effects of TRUNCATE on pgstat n_live_tup/n_dead_tup counters
+CREATE TABLE trunc_stats_test(id serial);
+
+CREATE TEMP TABLE prevstats AS
+SELECT n_tup_ins, n_tup_upd, n_tup_del, n_live_tup, n_dead_tup
+  FROM pg_stat_user_tables
+ WHERE relname='trunc_stats_test';
+
+create function wait_for_trunc_test_stats() returns prevstats as $$
+declare
+  start_time timestamptz := clock_timestamp();
+  newstats prevstats;
+  updated bool;
+begin
+  -- we don't want to wait forever; loop will exit after 30 seconds
+  for i in 1 .. 300 loop
+
+    SELECT INTO newstats
+           n_tup_ins, n_tup_upd, n_tup_del, n_live_tup, n_dead_tup
+      FROM pg_stat_user_tables
+     WHERE relname='trunc_stats_test';
+
+    SELECT INTO updated
+           row(p.*) <> newstats
+      FROM prevstats p;
+
+    exit when updated;
+
+    -- wait a little
+    perform pg_sleep(0.1);
+
+    -- reset stats snapshot so we can test again
+    perform pg_stat_clear_snapshot();
+
+  end loop;
+
+  TRUNCATE prevstats;  -- what a pun
+  INSERT INTO prevstats SELECT newstats.*;
+
+  -- report time waited in postmaster log (where it won't change test output)
+  raise log 'wait_for_stats delayed % seconds',
+    extract(epoch from clock_timestamp() - start_time);
+
+  RETURN newstats;
+end
+$$ language plpgsql;
+
+-- populate the table so we can check that n_live_tup is reset to 0
+-- after truncate
+INSERT INTO trunc_stats_test DEFAULT VALUES;
+INSERT INTO trunc_stats_test DEFAULT VALUES;
+INSERT INTO trunc_stats_test DEFAULT VALUES;
+
+-- wait for stats collector to update
+SELECT pg_sleep(0.5);
+SELECT * FROM wait_for_trunc_test_stats();
+
+TRUNCATE trunc_stats_test;
+SELECT pg_sleep(0.5);
+SELECT * FROM wait_for_trunc_test_stats();
+
+-- repopulate the table
+INSERT INTO trunc_stats_test DEFAULT VALUES;
+INSERT INTO trunc_stats_test DEFAULT VALUES;
+INSERT INTO trunc_stats_test DEFAULT VALUES;
+UPDATE trunc_stats_test SET id = id + 10 WHERE id < 6; -- UPDATE 2
+DELETE FROM trunc_stats_test WHERE id = 6;             -- DELETE 1
+
+SELECT pg_sleep(0.5);
+SELECT * FROM wait_for_trunc_test_stats();
+
+BEGIN;
+UPDATE trunc_stats_test SET id = id + 100; -- UPDATE 2
+TRUNCATE trunc_stats_test;
+INSERT INTO trunc_stats_test DEFAULT VALUES;
+COMMIT;
+
+SELECT pg_sleep(0.5);
+SELECT * FROM wait_for_trunc_test_stats();
+
+-- now to use a savepoint: this should only count 1 insert and have 1
+-- live tuple after commit
+BEGIN;
+INSERT INTO trunc_stats_test DEFAULT VALUES;
+INSERT INTO trunc_stats_test DEFAULT VALUES;
+SAVEPOINT p1;
+INSERT INTO trunc_stats_test DEFAULT VALUES;
+TRUNCATE trunc_stats_test;
+INSERT INTO trunc_stats_test DEFAULT VALUES;
+RELEASE SAVEPOINT p1;
+COMMIT;
+
+SELECT pg_sleep(0.5);
+SELECT * FROM wait_for_trunc_test_stats();
+
+DROP TABLE prevstats CASCADE;
+DROP TABLE trunc_stats_test;

@@ -1224,6 +1224,8 @@ ExecuteTruncate(TruncateStmt *stmt)
 			 */
 			reindex_relation(heap_relid, REINDEX_REL_PROCESS_TOAST);
 		}
+
+		pgstat_count_heap_truncate(rel);
 	}
 
 	/*

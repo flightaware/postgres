@@ -201,6 +201,7 @@ typedef struct TwoPhasePgStatRecord
 	PgStat_Counter tuples_deleted;		/* tuples deleted in xact */
 	Oid			t_id;			/* table's OID */
 	bool		t_shared;		/* is it a shared catalog? */
+	bool		t_truncated;	/* was the relation truncated? */
 } TwoPhasePgStatRecord;
 
 /*
@@ -1864,6 +1865,30 @@ pgstat_count_heap_delete(Relation rel)
 }
 
 /*
+ * pgstat_count_heap_truncate - update tuple counters due to truncate
+ */
+void
+pgstat_count_heap_truncate(Relation rel)
+{
+	PgStat_TableStatus *pgstat_info = rel->pgstat_info;
+
+	if (pgstat_info != NULL)
+	{
+		/* We have to log the effect at the proper transactional level */
+		int			nest_level = GetCurrentTransactionNestLevel();
+
+		if (pgstat_info->trans == NULL ||
+			pgstat_info->trans->nest_level != nest_level)
+			add_tabstat_xact_level(pgstat_info, nest_level);
+
+		pgstat_info->trans->tuples_inserted = 0;
+		pgstat_info->trans->tuples_updated = 0;
+		pgstat_info->trans->tuples_deleted = 0;
+		pgstat_info->trans->truncated = true;
+	}
+}
+
+/*
  * pgstat_update_heap_dead_tuples - update dead-tuples count
  *
  * The semantics of this are that we are reporting the nontransactional
@@ -1927,6 +1952,8 @@ AtEOXact_PgStat(bool isCommit)
 			tabstat->t_counts.t_tuples_deleted += trans->tuples_deleted;
 			if (isCommit)
 			{
+				tabstat->t_counts.t_truncated = trans->truncated;
+
 				/* insert adds a live tuple, delete removes one */
 				tabstat->t_counts.t_delta_live_tuples +=
 					trans->tuples_inserted - trans->tuples_deleted;
@@ -1991,9 +2018,20 @@ AtEOSubXact_PgStat(bool isCommit, int nestDepth)
 			{
 				if (trans->upper && trans->upper->nest_level == nestDepth - 1)
 				{
-					trans->upper->tuples_inserted += trans->tuples_inserted;
-					trans->upper->tuples_updated += trans->tuples_updated;
-					trans->upper->tuples_deleted += trans->tuples_deleted;
+					if (trans->truncated)
+					{
+						trans->upper->truncated = true;
+						/* replace upper xact stats with ours */
+						trans->upper->tuples_inserted = trans->tuples_inserted;
+						trans->upper->tuples_updated = trans->tuples_updated;
+						trans->upper->tuples_deleted = trans->tuples_deleted;
+					}
+					else
+					{
+						trans->upper->tuples_inserted += trans->tuples_inserted;
+						trans->upper->tuples_updated += trans->tuples_updated;
+						trans->upper->tuples_deleted += trans->tuples_deleted;
+					}
 					tabstat->trans = trans->upper;
 					pfree(trans);
 				}
@@ -2072,6 +2110,7 @@ AtPrepare_PgStat(void)
 			record.tuples_deleted = trans->tuples_deleted;
 			record.t_id = tabstat->t_id;
 			record.t_shared = tabstat->t_shared;
+			record.t_truncated = trans->truncated;
 
 			RegisterTwoPhaseRecord(TWOPHASE_RM_PGSTAT_ID, 0,
 								   &record, sizeof(TwoPhasePgStatRecord));
@@ -2137,6 +2176,8 @@ pgstat_twophase_postcommit(TransactionId xid, uint16 info,
 	pgstat_info->t_counts.t_tuples_inserted += rec->tuples_inserted;
 	pgstat_info->t_counts.t_tuples_updated += rec->tuples_updated;
 	pgstat_info->t_counts.t_tuples_deleted += rec->tuples_deleted;
+	pgstat_info->t_counts.t_truncated = rec->t_truncated;
+
 	pgstat_info->t_counts.t_delta_live_tuples +=
 		rec->tuples_inserted - rec->tuples_deleted;
 	pgstat_info->t_counts.t_delta_dead_tuples +=
@@ -4685,6 +4726,11 @@ pgstat_recv_tabstat(PgStat_MsgTabstat *msg, int len)
 			tabentry->tuples_updated += tabmsg->t_counts.t_tuples_updated;
 			tabentry->tuples_deleted += tabmsg->t_counts.t_tuples_deleted;
 			tabentry->tuples_hot_updated += tabmsg->t_counts.t_tuples_hot_updated;
+			if (tabmsg->t_counts.t_truncated)
+			{
+				tabentry->n_live_tuples = 0;
+				tabentry->n_dead_tuples = 0;
+			}
 			tabentry->n_live_tuples += tabmsg->t_counts.t_delta_live_tuples;
 			tabentry->n_dead_tuples += tabmsg->t_counts.t_delta_dead_tuples;
 			tabentry->changes_since_analyze += tabmsg->t_counts.t_changed_tuples;
