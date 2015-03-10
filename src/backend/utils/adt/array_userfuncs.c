@@ -12,9 +12,13 @@
  */
 #include "postgres.h"
 
+#include "catalog/pg_type.h"
 #include "utils/array.h"
 #include "utils/builtins.h"
 #include "utils/lsyscache.h"
+#include "utils/typcache.h"
+
+static bool array_offset_common(FunctionCallInfo fcinfo, int *result);
 
 
 /*
@@ -651,4 +655,265 @@ array_agg_array_finalfn(PG_FUNCTION_ARGS)
 	result = makeArrayResultArr(state, CurrentMemoryContext, false);
 
 	PG_RETURN_DATUM(result);
+}
+
+
+/*
+ * array_offset - returns a offset of entered element in a array.
+ * Returns NULL when values is not a element of the array. It allow
+ * searching a NULL value due using a NOT DISTINCT FROM operator. 
+ * 
+ * Biggest difference against width_array is unsorted input array.
+ */
+Datum
+array_offset(PG_FUNCTION_ARGS)
+{
+	int	result;
+
+	if (array_offset_common(fcinfo, &result))
+		PG_RETURN_INT32(result);
+
+	PG_RETURN_NULL();
+}
+
+
+Datum
+array_offset_start(PG_FUNCTION_ARGS)
+{
+	int	result;
+
+	if (array_offset_common(fcinfo, &result))
+		PG_RETURN_INT32(result);
+
+	PG_RETURN_NULL();
+}
+
+/*
+ * Common part for functions array_offset and array_offset_startpos
+ */
+static bool
+array_offset_common(FunctionCallInfo fcinfo,
+						 int 	*result)
+{
+	ArrayType	*array;
+	Oid		collation = PG_GET_COLLATION();
+	Oid			element_type;
+	Datum		searched_element = (Datum) 0,
+				    value;
+	bool		isnull;
+	int		offset = 0,
+			    offset_min = 1;
+	bool		found = false;
+	TypeCacheEntry		*typentry;
+	ArrayMetaState		*my_extra;
+	bool	null_search;
+	ArrayIterator	array_iterator;
+
+	if (PG_ARGISNULL(0))
+		return false;
+
+	array = PG_GETARG_ARRAYTYPE_P(0);
+	element_type = ARR_ELEMTYPE(array);
+
+	if (PG_ARGISNULL(1))
+	{
+		if (!array_contains_nulls(array))
+			return false;
+		null_search = true;
+	}
+	else
+	{
+		searched_element = PG_GETARG_DATUM(1);
+		null_search = false;
+	}
+
+	if (PG_NARGS() == 3)
+	{
+		if (PG_ARGISNULL(2))
+			ereport(ERROR,
+					(errcode(ERRCODE_NULL_VALUE_NOT_ALLOWED),
+					 errmsg("initial offset should not be NULL")));
+
+		offset_min = PG_GETARG_INT32(2);
+	}
+
+	/* cache operator info */
+	my_extra = (ArrayMetaState *) fcinfo->flinfo->fn_extra;
+	if (my_extra == NULL)
+	{
+		fcinfo->flinfo->fn_extra = MemoryContextAlloc(fcinfo->flinfo->fn_mcxt,
+													  sizeof(ArrayMetaState));
+		my_extra = (ArrayMetaState *) fcinfo->flinfo->fn_extra;
+		my_extra->element_type = ~element_type;
+	}
+
+	if (my_extra->element_type != element_type)
+	{
+		get_typlenbyvalalign(element_type,
+						 &my_extra->typlen,
+						 &my_extra->typbyval,
+						 &my_extra->typalign);
+
+		typentry = lookup_type_cache(element_type,
+									 TYPECACHE_EQ_OPR_FINFO);
+
+		if (!OidIsValid(typentry->eq_opr_finfo.fn_oid))
+			ereport(ERROR,
+					(errcode(ERRCODE_UNDEFINED_FUNCTION),
+			errmsg("could not identify an equality operator for type %s",
+				   format_type_be(element_type))));
+
+		my_extra->element_type = element_type;
+		fmgr_info(typentry->eq_opr_finfo.fn_oid, &my_extra->proc);
+	}
+
+	array_iterator = array_create_iterator(array, 0, my_extra);
+
+	while (array_iterate(array_iterator, &value, &isnull))
+	{
+		offset += 1;
+
+		if (offset < offset_min)
+			continue;
+
+		if (isnull || null_search)
+		{
+
+			if (isnull && null_search)
+			{
+				found = true;
+				break;
+			}
+			else
+				continue;
+		}
+
+		if (DatumGetBool(FunctionCall2Coll(&my_extra->proc, collation,
+										 searched_element,
+													 value)))
+		{
+			found = true;
+			break;
+		}
+	}
+
+	array_free_iterator(array_iterator);
+
+	/* Avoid leaking memory when handed toasted input */
+	PG_FREE_IF_COPY(array, 0);
+
+	if (!found)
+		return false;
+
+	*result = offset;
+
+	return true;
+}
+
+/*
+ * Returns a array of offsets of some value in array.
+ * Returns NULL, the array is NULL. When searching doesn't produce
+ * any value, then it returns empty array.
+ */
+Datum
+array_offsets(PG_FUNCTION_ARGS)
+{
+	ArrayType	*array;
+	Oid		collation = PG_GET_COLLATION();
+	Oid			element_type;
+	Datum		searched_element = (Datum) 0,
+				    value;
+	bool		isnull;
+	int		offset = 0;
+	TypeCacheEntry		*typentry;
+	ArrayMetaState		*my_extra;
+	bool	null_search;
+	ArrayIterator	array_iterator;
+	ArrayBuildState *astate = NULL;
+
+	if (PG_ARGISNULL(0))
+		PG_RETURN_NULL();
+
+	array = PG_GETARG_ARRAYTYPE_P(0);
+	element_type = ARR_ELEMTYPE(array);
+
+	astate = initArrayResult(INT4OID, CurrentMemoryContext, false);
+
+	if (PG_ARGISNULL(1))
+	{
+		/* fast return when we have no NULL */
+		if (!array_contains_nulls(array))
+			PG_RETURN_DATUM(makeArrayResult(astate, CurrentMemoryContext));
+
+		null_search = true;
+	}
+	else
+	{
+		searched_element = PG_GETARG_DATUM(1);
+		null_search = false;
+	}
+
+	element_type = ARR_ELEMTYPE(array);
+
+	/* cache operator info */
+	my_extra = (ArrayMetaState *) fcinfo->flinfo->fn_extra;
+	if (my_extra == NULL)
+	{
+		fcinfo->flinfo->fn_extra = MemoryContextAlloc(fcinfo->flinfo->fn_mcxt,
+													  sizeof(ArrayMetaState));
+		my_extra = (ArrayMetaState *) fcinfo->flinfo->fn_extra;
+		my_extra->element_type = ~element_type;
+	}
+
+	if (my_extra->element_type != element_type)
+	{
+		get_typlenbyvalalign(element_type,
+						 &my_extra->typlen,
+						 &my_extra->typbyval,
+						 &my_extra->typalign);
+
+		typentry = lookup_type_cache(element_type,
+									 TYPECACHE_EQ_OPR_FINFO);
+
+		if (!OidIsValid(typentry->eq_opr_finfo.fn_oid))
+			ereport(ERROR,
+					(errcode(ERRCODE_UNDEFINED_FUNCTION),
+			errmsg("could not identify an equality operator for type %s",
+				   format_type_be(element_type))));
+
+		my_extra->element_type = element_type;
+		fmgr_info(typentry->eq_opr_finfo.fn_oid, &my_extra->proc);
+	}
+
+	array_iterator = array_create_iterator(array, 0, my_extra);
+
+	while (array_iterate(array_iterator, &value, &isnull))
+	{
+		offset += 1;
+
+		if (isnull || null_search)
+		{
+
+			if (isnull && null_search)
+				astate = accumArrayResult(astate,
+								    Int32GetDatum(offset), false, INT4OID,
+								    CurrentMemoryContext);
+
+			continue;
+		}
+
+		if (DatumGetBool(FunctionCall2Coll(&my_extra->proc, collation,
+										 searched_element,
+													 value)))
+			astate = accumArrayResult(astate,
+							    Int32GetDatum(offset), false, INT4OID,
+							    CurrentMemoryContext);
+	}
+
+	array_free_iterator(array_iterator);
+
+	/* Avoid leaking memory when handed toasted input */
+	PG_FREE_IF_COPY(array, 0);
+
+	PG_RETURN_DATUM(makeArrayResult(astate, CurrentMemoryContext));
 }

@@ -11480,6 +11480,9 @@ SELECT NULLIF(value, '(none)') ...
     <primary>array_lower</primary>
   </indexterm>
   <indexterm>
+    <primary>array_offset</primary>
+  </indexterm>
+  <indexterm>
     <primary>array_prepend</primary>
   </indexterm>
   <indexterm>
@@ -11595,6 +11598,33 @@ SELECT NULLIF(value, '(none)') ...
         <entry>returns lower bound of the requested array dimension</entry>
         <entry><literal>array_lower('[0:2]={1,2,3}'::int[], 1)</literal></entry>
         <entry><literal>0</literal></entry>
+       </row>
+       <row>
+        <entry>
+         <literal>
+          <function>array_offset</function>(<type>anyarray</type>, <type>anyelement</type> <optional>, <type>int</type></optional>)
+         </literal>
+        </entry>
+        <entry><type>int</type></entry>
+        <entry>returns a offset of first occurrence of some element in a array. It uses
+        a <literal>IS NOT DISTINCT FROM</> operator for comparation. Third
+        optional argument can specify a initial offset when searching starts.
+        Returns NULL when there are not occurence of value in array.</entry>
+        <entry><literal>array_offset(ARRAY['sun','mon','tue','wen','thu','fri','sat'], 'mon')</literal></entry>
+        <entry><literal>2</literal></entry>
+       </row>
+       <row>
+        <entry>
+         <literal>
+          <function>array_offsets</function>(<type>anyarray</type>, <type>anyelement</type>)
+         </literal>
+        </entry>
+        <entry><type>int[]</type></entry>
+        <entry>returns a array of offset of all occurrences some element in a array. It uses
+        a <literal>IS NOT DISTINCT FROM</> operator for comparation. Returns empty array,
+        when there are no occurence of element in input array.</entry>
+        <entry><literal>array_offsets(ARRAY['A','A','B','A'], 'A')</literal></entry>
+        <entry><literal>{1,2,4}</literal></entry>
        </row>
        <row>
         <entry>

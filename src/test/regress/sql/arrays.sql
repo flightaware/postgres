@@ -185,6 +185,38 @@ SELECT array_cat(ARRAY[1,2], ARRAY[3,4]) AS "{1,2,3,4}";
 SELECT array_cat(ARRAY[1,2], ARRAY[[3,4],[5,6]]) AS "{{1,2},{3,4},{5,6}}";
 SELECT array_cat(ARRAY[[3,4],[5,6]], ARRAY[1,2]) AS "{{3,4},{5,6},{1,2}}";
 
+SELECT array_offset(ARRAY[1,2,3,4,5], 4);
+SELECT array_offset(ARRAY[5,3,4,2,1], 4);
+SELECT array_offset(ARRAY[[1,2],[3,4]], 3);
+SELECT array_offset(ARRAY[[1,2],[3,4]], 4);
+SELECT array_offset(ARRAY['sun','mon','tue','wen','thu','fri','sat'], 'mon');
+SELECT array_offset(ARRAY['sun','mon','tue','wen','thu','fri','sat'], 'sat');
+SELECT array_offset(ARRAY['sun','mon','tue','wen','thu','fri','sat'], NULL);
+SELECT array_offset(ARRAY['sun','mon','tue','wen','thu',NULL,'fri','sat'], NULL);
+SELECT array_offset(ARRAY['sun','mon','tue','wen','thu',NULL,'fri','sat'], 'sat');
+
+SELECT array_offsets(NULL, 10);
+SELECT array_offsets(NULL, NULL::int);
+SELECT array_offsets(ARRAY[1,2,3,4,5,6,1,2,3,4,5,6], 4);
+SELECT array_offsets(ARRAY[1,2,3,4,5,6,1,2,3,4,5,6], NULL);
+SELECT array_offsets(ARRAY[1,2,3,NULL,5,6,1,2,3,NULL,5,6], NULL);
+SELECT array_length(array_offsets(ARRAY(SELECT 'AAAAAAAAAAAAAAAAAAAAAAAAA'::text || i % 10 FROM generate_series(1,100) g(i)),
+                                  'AAAAAAAAAAAAAAAAAAAAAAAAA5'),1);
+
+do $$
+declare 
+  o int;
+  a int[] := ARRAY[1,2,3,2,3,1,2];
+begin
+  o := array_offset(a, 2);
+  while o is not null
+  loop
+    raise notice '%', o;
+    o := array_offset(a, 2, o + 1);
+  end loop;
+end
+$$ language plpgsql;
+
 -- operators
 SELECT a FROM arrtest WHERE b = ARRAY[[[113,142],[1,147]]];
 SELECT NOT ARRAY[1.1,1.2,1.3] = ARRAY[1.1,1.2,1.3] AS "FALSE";
