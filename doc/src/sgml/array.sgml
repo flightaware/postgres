@@ -601,8 +601,8 @@ SELECT * FROM sal_emp WHERE pay_by_quarter && ARRAY[10000];
  </para>
 
  <para>
-  You can also search any value in array using the <function>array_offset</>
-  function (It returns a position of first occurrence of value in the array):
+  You can also search for a value in an array using the <function>array_offset</>
+  function. It returns the position of the first occurrence of a value in an array:
 
 <programlisting>
 SELECT array_offset(ARRAY['sun','mon','tue','wen','thu','fri','sat'], 'mon');

@@ -11606,10 +11606,12 @@ SELECT NULLIF(value, '(none)') ...
          </literal>
         </entry>
         <entry><type>int</type></entry>
-        <entry>returns a offset of first occurrence of some element in a array. It uses
-        a <literal>IS NOT DISTINCT FROM</> operator for comparation. Third
-        optional argument can specify a initial offset when searching starts.
-        Returns NULL when there are not occurence of value in array.</entry>
+        <entry>returns the offset of the first occurrence of a value in an
+        array. It uses the <literal>IS NOT DISTINCT FROM</> operator for
+        comparation. The optional third argument specifies an initial offset to
+        begin the search at.  Returns NULL when the value is not found. Note:
+        multi-dimensional arrays are squashed to one dimension before
+        searching.</entry>
         <entry><literal>array_offset(ARRAY['sun','mon','tue','wen','thu','fri','sat'], 'mon')</literal></entry>
         <entry><literal>2</literal></entry>
        </row>
@@ -11620,9 +11622,11 @@ SELECT NULLIF(value, '(none)') ...
          </literal>
         </entry>
         <entry><type>int[]</type></entry>
-        <entry>returns a array of offset of all occurrences some element in a array. It uses
-        a <literal>IS NOT DISTINCT FROM</> operator for comparation. Returns empty array,
-        when there are no occurence of element in input array.</entry>
+        <entry>returns an array of offsets of all occurrences of a value in a array. It uses
+        the <literal>IS NOT DISTINCT FROM</> operator for comparation. Returns an empty array
+        when there are no occurences of the value in the array. Note:
+        multi-dimensional input arrays are squashed to one dimension before
+        searching.</entry>
         <entry><literal>array_offsets(ARRAY['A','A','B','A'], 'A')</literal></entry>
         <entry><literal>{1,2,4}</literal></entry>
        </row>
