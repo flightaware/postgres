@@ -659,9 +659,9 @@ array_agg_array_finalfn(PG_FUNCTION_ARGS)
 
 
 /*
- * array_offset - returns a offset of entered element in a array.
- * Returns NULL when values is not a element of the array. It allow
- * searching a NULL value due using a NOT DISTINCT FROM operator. 
+ * array_offset - returns the offset of a value in an array.
+ * Returns NULL when value is not found. Uses NOT DISTINCT FROM operator to
+ * allow searching for NULL.
  * 
  * Biggest difference against width_array is unsorted input array.
  */
