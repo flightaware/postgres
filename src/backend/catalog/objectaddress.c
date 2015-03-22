@@ -492,9 +492,9 @@ ObjectTypeMap[] =
 	/* OCLASS_OPFAMILY */
 	{ "operator family", OBJECT_OPFAMILY },
 	/* OCLASS_AMOP */
-	{ "operator of access method", -1 },	/* unmapped */
+	{ "operator of access method", OBJECT_AMOP },
 	/* OCLASS_AMPROC */
-	{ "function of access method", -1 },	/* unmapped */
+	{ "function of access method", OBJECT_AMPROC },
 	/* OCLASS_REWRITE */
 	{ "rule", OBJECT_RULE },
 	/* OCLASS_TRIGGER */
@@ -520,9 +520,9 @@ ObjectTypeMap[] =
 	/* OCLASS_FOREIGN_SERVER */
 	{ "server", OBJECT_FOREIGN_SERVER },
 	/* OCLASS_USER_MAPPING */
-	{ "user mapping", -1 },		/* unmapped */
+	{ "user mapping", OBJECT_USER_MAPPING },
 	/* OCLASS_DEFACL */
-	{ "default acl", -1 },		/* unmapped */
+	{ "default acl", OBJECT_DEFACL },
 	/* OCLASS_EXTENSION */
 	{ "extension", OBJECT_EXTENSION },
 	/* OCLASS_EVENT_TRIGGER */
@@ -552,9 +552,16 @@ static ObjectAddress get_object_address_attrdef(ObjectType objtype,
 						   List *objname, Relation *relp, LOCKMODE lockmode,
 						   bool missing_ok);
 static ObjectAddress get_object_address_type(ObjectType objtype,
-						List *objname, bool missing_ok);
+						ListCell *typecell, bool missing_ok);
 static ObjectAddress get_object_address_opcf(ObjectType objtype, List *objname,
-						List *objargs, bool missing_ok);
+						bool missing_ok);
+static ObjectAddress get_object_address_opf_member(ObjectType objtype,
+							  List *objname, List *objargs, bool missing_ok);
+
+static ObjectAddress get_object_address_usermapping(List *objname,
+							   List *objargs, bool missing_ok);
+static ObjectAddress get_object_address_defacl(List *objname, List *objargs,
+						  bool missing_ok);
 static const ObjectPropertyType *get_object_property_data(Oid class_id);
 
 static void getRelationDescription(StringInfo buffer, Oid relid);
@@ -563,8 +570,7 @@ static void getRelationTypeDescription(StringInfo buffer, Oid relid,
 						   int32 objectSubId);
 static void getProcedureTypeDescription(StringInfo buffer, Oid procid);
 static void getConstraintTypeDescription(StringInfo buffer, Oid constroid);
-static void getOpFamilyIdentity(StringInfo buffer, Oid opfid, List **objname,
-					List **objargs);
+static void getOpFamilyIdentity(StringInfo buffer, Oid opfid, List **objname);
 static void getRelationIdentity(StringInfo buffer, Oid relid, List **objname);
 
 /*
@@ -657,7 +663,8 @@ get_object_address(ObjectType objtype, List *objname, List *objargs,
 					ObjectAddress	domaddr;
 					char		   *constrname;
 
-					domaddr = get_object_address_type(OBJECT_DOMAIN, objname, missing_ok);
+					domaddr = get_object_address_type(OBJECT_DOMAIN,
+													  list_head(objname), missing_ok);
 					constrname = strVal(linitial(objargs));
 
 					address.classId = ConstraintRelationId;
@@ -681,7 +688,7 @@ get_object_address(ObjectType objtype, List *objname, List *objargs,
 				break;
 			case OBJECT_TYPE:
 			case OBJECT_DOMAIN:
-				address = get_object_address_type(objtype, objname, missing_ok);
+				address = get_object_address_type(objtype, list_head(objname), missing_ok);
 				break;
 			case OBJECT_AGGREGATE:
 				address.classId = ProcedureRelationId;
@@ -717,8 +724,12 @@ get_object_address(ObjectType objtype, List *objname, List *objargs,
 				break;
 			case OBJECT_OPCLASS:
 			case OBJECT_OPFAMILY:
-				address = get_object_address_opcf(objtype,
-											   objname, objargs, missing_ok);
+				address = get_object_address_opcf(objtype, objname, missing_ok);
+				break;
+			case OBJECT_AMOP:
+			case OBJECT_AMPROC:
+				address = get_object_address_opf_member(objtype, objname,
+														objargs, missing_ok);
 				break;
 			case OBJECT_LARGEOBJECT:
 				Assert(list_length(objname) == 1);
@@ -768,6 +779,14 @@ get_object_address(ObjectType objtype, List *objname, List *objargs,
 				address.classId = TSConfigRelationId;
 				address.objectId = get_ts_config_oid(objname, missing_ok);
 				address.objectSubId = 0;
+				break;
+			case OBJECT_USER_MAPPING:
+				address = get_object_address_usermapping(objname, objargs,
+														 missing_ok);
+				break;
+			case OBJECT_DEFACL:
+				address = get_object_address_defacl(objname, objargs,
+													missing_ok);
 				break;
 			default:
 				elog(ERROR, "unrecognized objtype: %d", (int) objtype);
@@ -1297,13 +1316,13 @@ get_object_address_attrdef(ObjectType objtype, List *objname,
  * Find the ObjectAddress for a type or domain
  */
 static ObjectAddress
-get_object_address_type(ObjectType objtype, List *objname, bool missing_ok)
+get_object_address_type(ObjectType objtype, ListCell *typecell, bool missing_ok)
 {
 	ObjectAddress address;
 	TypeName   *typename;
 	Type		tup;
 
-	typename = (TypeName *) linitial(objname);
+	typename = (TypeName *) lfirst(typecell);
 
 	address.classId = TypeRelationId;
 	address.objectId = InvalidOid;
@@ -1339,15 +1358,14 @@ get_object_address_type(ObjectType objtype, List *objname, bool missing_ok)
  * Find the ObjectAddress for an opclass or opfamily.
  */
 static ObjectAddress
-get_object_address_opcf(ObjectType objtype,
-						List *objname, List *objargs, bool missing_ok)
+get_object_address_opcf(ObjectType objtype, List *objname, bool missing_ok)
 {
 	Oid			amoid;
 	ObjectAddress address;
 
-	Assert(list_length(objargs) == 1);
 	/* XXX no missing_ok support here */
-	amoid = get_am_oid(strVal(linitial(objargs)), false);
+	amoid = get_am_oid(strVal(linitial(objname)), false);
+	objname = list_copy_tail(objname, 1);
 
 	switch (objtype)
 	{
@@ -1369,6 +1387,290 @@ get_object_address_opcf(ObjectType objtype,
 			address.objectSubId = 0;
 	}
 
+	return address;
+}
+
+/*
+ * Find the ObjectAddress for an opclass/opfamily member.
+ *
+ * (The returned address corresponds to a pg_amop/pg_amproc object).
+ */
+static ObjectAddress
+get_object_address_opf_member(ObjectType objtype,
+							  List *objname, List *objargs, bool missing_ok)
+{
+	ObjectAddress	famaddr;
+	ObjectAddress	address;
+	ListCell *cell;
+	List   *copy;
+	char   *typenames[2];
+	Oid		typeoids[2];
+	int		membernum;
+	int		i;
+
+	/*
+	 * The last element of the objname list contains the strategy or procedure
+	 * number.  We need to strip that out before getting the opclass/family
+	 * address.  The rest can be used directly by get_object_address_opcf().
+	 */
+	membernum = atoi(strVal(llast(objname)));
+	copy = list_truncate(list_copy(objname), list_length(objname) - 1);
+
+	/* no missing_ok support here */
+	famaddr = get_object_address_opcf(OBJECT_OPFAMILY, copy, false);
+
+	/* find out left/right type names and OIDs */
+	i = 0;
+	foreach (cell, objargs)
+	{
+		ObjectAddress	typaddr;
+
+		typenames[i] = strVal(lfirst(cell));
+		typaddr = get_object_address_type(OBJECT_TYPE, cell, missing_ok);
+		typeoids[i] = typaddr.objectId;
+		if (++i >= 2)
+			break;
+	}
+
+	switch (objtype)
+	{
+		case OBJECT_AMOP:
+			{
+				HeapTuple	tp;
+
+				ObjectAddressSet(address, AccessMethodOperatorRelationId,
+								 InvalidOid);
+
+				tp = SearchSysCache4(AMOPSTRATEGY,
+									 ObjectIdGetDatum(famaddr.objectId),
+									 ObjectIdGetDatum(typeoids[0]),
+									 ObjectIdGetDatum(typeoids[1]),
+									 Int16GetDatum(membernum));
+				if (!HeapTupleIsValid(tp))
+				{
+					if (!missing_ok)
+						ereport(ERROR,
+								(errcode(ERRCODE_UNDEFINED_OBJECT),
+								 errmsg("operator %d (%s, %s) of %s does not exist",
+										membernum, typenames[0], typenames[1],
+										getObjectDescription(&famaddr))));
+				}
+				else
+				{
+					address.objectId = HeapTupleGetOid(tp);
+					ReleaseSysCache(tp);
+				}
+			}
+			break;
+
+		case OBJECT_AMPROC:
+			{
+				HeapTuple	tp;
+
+				ObjectAddressSet(address, AccessMethodProcedureRelationId,
+								 InvalidOid);
+
+				tp = SearchSysCache4(AMPROCNUM,
+									 ObjectIdGetDatum(famaddr.objectId),
+									 ObjectIdGetDatum(typeoids[0]),
+									 ObjectIdGetDatum(typeoids[1]),
+									 Int16GetDatum(membernum));
+				if (!HeapTupleIsValid(tp))
+				{
+					if (!missing_ok)
+						ereport(ERROR,
+								(errcode(ERRCODE_UNDEFINED_OBJECT),
+								 errmsg("function %d (%s, %s) of %s does not exist",
+										membernum, typenames[0], typenames[1],
+										getObjectDescription(&famaddr))));
+				}
+				else
+				{
+					address.objectId = HeapTupleGetOid(tp);
+					ReleaseSysCache(tp);
+				}
+			}
+			break;
+		default:
+			elog(ERROR, "unrecognized objtype: %d", (int) objtype);
+	}
+
+	return address;
+}
+
+/*
+ * Find the ObjectAddress for a user mapping.
+ */
+static ObjectAddress
+get_object_address_usermapping(List *objname, List *objargs, bool missing_ok)
+{
+	ObjectAddress address;
+	Oid			userid;
+	char	   *username;
+	char	   *servername;
+	ForeignServer *server;
+	HeapTuple	tp;
+
+	ObjectAddressSet(address, UserMappingRelationId, InvalidOid);
+
+	/* fetch string names from input lists, for error messages */
+	username = strVal(linitial(objname));
+	servername = strVal(linitial(objargs));
+
+	/* look up pg_authid OID of mapped user; InvalidOid if PUBLIC */
+	if (strcmp(username, "public") == 0)
+		userid = InvalidOid;
+	else
+	{
+		tp = SearchSysCache1(AUTHNAME,
+							 CStringGetDatum(username));
+		if (!HeapTupleIsValid(tp))
+		{
+			if (!missing_ok)
+				ereport(ERROR,
+						(errcode(ERRCODE_UNDEFINED_OBJECT),
+						 errmsg("user mapping for user \"%s\" in server \"%s\" does not exist",
+								username, servername)));
+			return address;
+		}
+		userid = HeapTupleGetOid(tp);
+		ReleaseSysCache(tp);
+	}
+
+	/* Now look up the pg_user_mapping tuple */
+	server = GetForeignServerByName(servername, true);
+	if (!server)
+	{
+		if (!missing_ok)
+			ereport(ERROR,
+					(errcode(ERRCODE_UNDEFINED_OBJECT),
+					 errmsg("server \"%s\" does not exist", servername)));
+		return address;
+	}
+	tp = SearchSysCache2(USERMAPPINGUSERSERVER,
+						 ObjectIdGetDatum(userid),
+						 ObjectIdGetDatum(server->serverid));
+	if (!HeapTupleIsValid(tp))
+	{
+		if (!missing_ok)
+			ereport(ERROR,
+					(errcode(ERRCODE_UNDEFINED_OBJECT),
+					 errmsg("user mapping for user \"%s\" in server \"%s\" does not exist",
+							username, servername)));
+		return address;
+	}
+
+	address.objectId = HeapTupleGetOid(tp);
+
+	ReleaseSysCache(tp);
+
+	return address;
+}
+
+/*
+ * Find the ObjectAddress for a default ACL.
+ */
+static ObjectAddress
+get_object_address_defacl(List *objname, List *objargs, bool missing_ok)
+{
+	HeapTuple	tp;
+	Oid			userid;
+	Oid			schemaid;
+	char	   *username;
+	char	   *schema;
+	char		objtype;
+	char	   *objtype_str;
+	ObjectAddress address;
+
+	ObjectAddressSet(address, DefaultAclRelationId, InvalidOid);
+
+	/*
+	 * First figure out the textual attributes so that they can be used for
+	 * error reporting.
+	 */
+	username = strVal(linitial(objname));
+	if (list_length(objname) >= 2)
+		schema = (char *) strVal(lsecond(objname));
+	else
+		schema = NULL;
+
+	/*
+	 * Decode defaclobjtype.  Only first char is considered; the rest of the
+	 * string, if any, is blissfully ignored.
+	 */
+	objtype = ((char *) strVal(linitial(objargs)))[0];
+	switch (objtype)
+	{
+		case DEFACLOBJ_RELATION:
+			objtype_str = "tables";
+			break;
+		case DEFACLOBJ_SEQUENCE:
+			objtype_str = "sequences";
+			break;
+		case DEFACLOBJ_FUNCTION:
+			objtype_str = "functions";
+			break;
+		case DEFACLOBJ_TYPE:
+			objtype_str = "types";
+			break;
+		default:
+			ereport(ERROR,
+					(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+					 errmsg("unrecognized default ACL object type %c", objtype),
+					 errhint("Valid object types are 'r', 'S', 'f', and 'T'.")));
+	}
+
+	/*
+	 * Look up user ID.  Behave as "default ACL not found" if the user doesn't
+	 * exist.
+	 */
+	tp = SearchSysCache1(AUTHNAME,
+						 CStringGetDatum(username));
+	if (!HeapTupleIsValid(tp))
+		goto not_found;
+	userid = HeapTupleGetOid(tp);
+	ReleaseSysCache(tp);
+
+	/*
+	 * If a schema name was given, look up its OID.  If it doesn't exist,
+	 * behave as "default ACL not found".
+	 */
+	if (schema)
+	{
+		schemaid = get_namespace_oid(schema, true);
+		if (schemaid == InvalidOid)
+			goto not_found;
+	}
+	else
+		schemaid = InvalidOid;
+
+	/* Finally, look up the pg_default_acl object */
+	tp = SearchSysCache3(DEFACLROLENSPOBJ,
+						 ObjectIdGetDatum(userid),
+						 ObjectIdGetDatum(schemaid),
+						 CharGetDatum(objtype));
+	if (!HeapTupleIsValid(tp))
+		goto not_found;
+
+	address.objectId = HeapTupleGetOid(tp);
+	ReleaseSysCache(tp);
+
+	return address;
+
+not_found:
+	if (!missing_ok)
+	{
+		if (schema)
+			ereport(ERROR,
+					(errcode(ERRCODE_UNDEFINED_OBJECT),
+					 errmsg("default ACL for user \"%s\" in schema \"%s\" on %s does not exist",
+							username, schema, objtype_str)));
+		else
+			ereport(ERROR,
+					(errcode(ERRCODE_UNDEFINED_OBJECT),
+					 errmsg("default ACL for user \"%s\" on %s does not exist",
+							username, objtype_str)));
+	}
 	return address;
 }
 
@@ -1485,7 +1787,9 @@ pg_get_object_address(PG_FUNCTION_ARGS)
 	if (type == OBJECT_AGGREGATE ||
 		type == OBJECT_FUNCTION ||
 		type == OBJECT_OPERATOR ||
-		type == OBJECT_CAST)
+		type == OBJECT_CAST ||
+		type == OBJECT_AMOP ||
+		type == OBJECT_AMPROC)
 	{
 		/* in these cases, the args list must be of TypeName */
 		Datum  *elems;
@@ -1520,14 +1824,28 @@ pg_get_object_address(PG_FUNCTION_ARGS)
 	switch (type)
 	{
 		case OBJECT_DOMCONSTRAINT:
-		case OBJECT_OPCLASS:
-		case OBJECT_OPFAMILY:
 		case OBJECT_CAST:
+		case OBJECT_USER_MAPPING:
+		case OBJECT_DEFACL:
 			if (list_length(args) != 1)
 				ereport(ERROR,
 						(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
 						 errmsg("argument list length must be exactly %d", 1)));
 			break;
+		case OBJECT_OPFAMILY:
+		case OBJECT_OPCLASS:
+			if (list_length(name) < 2)
+				ereport(ERROR,
+						(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+						 errmsg("name list length must be at least %d", 2)));
+			break;
+		case OBJECT_AMOP:
+		case OBJECT_AMPROC:
+			if (list_length(name) < 3)
+				ereport(ERROR,
+						(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+						 errmsg("name list length must be at least %d", 3)));
+			/* fall through to check args length */
 		case OBJECT_OPERATOR:
 			if (list_length(args) != 2)
 				ereport(ERROR,
@@ -3540,24 +3858,22 @@ getObjectIdentityParts(const ObjectAddress *object,
 						 opcForm->opcmethod);
 				amForm = (Form_pg_am) GETSTRUCT(amTup);
 
-				appendStringInfoString(&buffer,
-									   quote_qualified_identifier(schema,
-												 NameStr(opcForm->opcname)));
-				appendStringInfo(&buffer, " USING %s",
+				appendStringInfo(&buffer, "%s USING %s",
+								 quote_qualified_identifier(schema,
+															NameStr(opcForm->opcname)),
 								 quote_identifier(NameStr(amForm->amname)));
 				if (objname)
-				{
-					*objname = list_make2(pstrdup(schema),
+					*objname = list_make3(pstrdup(NameStr(amForm->amname)),
+										  schema,
 										  pstrdup(NameStr(opcForm->opcname)));
-					*objargs = list_make1(pstrdup(NameStr(amForm->amname)));
-				}
+
 				ReleaseSysCache(amTup);
 				ReleaseSysCache(opcTup);
 				break;
 			}
 
 		case OCLASS_OPFAMILY:
-			getOpFamilyIdentity(&buffer, object->objectId, objname, objargs);
+			getOpFamilyIdentity(&buffer, object->objectId, objname);
 			break;
 
 		case OCLASS_AMOP:
@@ -3568,10 +3884,8 @@ getObjectIdentityParts(const ObjectAddress *object,
 				SysScanDesc amscan;
 				Form_pg_amop amopForm;
 				StringInfoData opfam;
-
-				/* no objname support here */
-				if (objname)
-					*objname = NIL;
+				char	   *ltype;
+				char	   *rtype;
 
 				amopDesc = heap_open(AccessMethodOperatorRelationId,
 									 AccessShareLock);
@@ -3593,13 +3907,21 @@ getObjectIdentityParts(const ObjectAddress *object,
 				amopForm = (Form_pg_amop) GETSTRUCT(tup);
 
 				initStringInfo(&opfam);
-				getOpFamilyIdentity(&opfam, amopForm->amopfamily, NULL, NULL);
+				getOpFamilyIdentity(&opfam, amopForm->amopfamily, objname);
+
+				ltype = format_type_be_qualified(amopForm->amoplefttype);
+				rtype = format_type_be_qualified(amopForm->amoprighttype);
+
+				if (objname)
+				{
+					*objname = lappend(*objname,
+									   psprintf("%d", amopForm->amopstrategy));
+					*objargs = list_make2(ltype, rtype);
+				}
 
 				appendStringInfo(&buffer, "operator %d (%s, %s) of %s",
 								 amopForm->amopstrategy,
-							format_type_be_qualified(amopForm->amoplefttype),
-						   format_type_be_qualified(amopForm->amoprighttype),
-								 opfam.data);
+								 ltype, rtype, opfam.data);
 
 				pfree(opfam.data);
 
@@ -3616,10 +3938,8 @@ getObjectIdentityParts(const ObjectAddress *object,
 				HeapTuple	tup;
 				Form_pg_amproc amprocForm;
 				StringInfoData opfam;
-
-				/* no objname support here */
-				if (objname)
-					*objname = NIL;
+				char	   *ltype;
+				char	   *rtype;
 
 				amprocDesc = heap_open(AccessMethodProcedureRelationId,
 									   AccessShareLock);
@@ -3641,13 +3961,21 @@ getObjectIdentityParts(const ObjectAddress *object,
 				amprocForm = (Form_pg_amproc) GETSTRUCT(tup);
 
 				initStringInfo(&opfam);
-				getOpFamilyIdentity(&opfam, amprocForm->amprocfamily, NULL, NULL);
+				getOpFamilyIdentity(&opfam, amprocForm->amprocfamily, objname);
+
+				ltype = format_type_be_qualified(amprocForm->amproclefttype);
+				rtype = format_type_be_qualified(amprocForm->amprocrighttype);
+
+				if (objname)
+				{
+					*objname = lappend(*objname,
+									   psprintf("%d", amprocForm->amprocnum));
+					*objargs = list_make2(ltype, rtype);
+				}
 
 				appendStringInfo(&buffer, "function %d (%s, %s) of %s",
 								 amprocForm->amprocnum,
-						format_type_be_qualified(amprocForm->amproclefttype),
-					   format_type_be_qualified(amprocForm->amprocrighttype),
-								 opfam.data);
+								 ltype, rtype, opfam.data);
 
 				pfree(opfam.data);
 
@@ -3948,10 +4276,8 @@ getObjectIdentityParts(const ObjectAddress *object,
 				SysScanDesc rcscan;
 				HeapTuple	tup;
 				Form_pg_default_acl defacl;
-
-				/* no objname support */
-				if (objname)
-					*objname = NIL;
+				char	   *schema;
+				char	   *username;
 
 				defaclrel = heap_open(DefaultAclRelationId, AccessShareLock);
 
@@ -3971,19 +4297,20 @@ getObjectIdentityParts(const ObjectAddress *object,
 
 				defacl = (Form_pg_default_acl) GETSTRUCT(tup);
 
+				username = GetUserNameFromId(defacl->defaclrole);
 				appendStringInfo(&buffer,
 								 "for role %s",
-					quote_identifier(GetUserNameFromId(defacl->defaclrole)));
+								 quote_identifier(username));
 
 				if (OidIsValid(defacl->defaclnamespace))
 				{
-					char	   *schema;
-
 					schema = get_namespace_name(defacl->defaclnamespace);
 					appendStringInfo(&buffer,
 									 " in schema %s",
 									 quote_identifier(schema));
 				}
+				else
+					schema = NULL;
 
 				switch (defacl->defaclobjtype)
 				{
@@ -4003,6 +4330,14 @@ getObjectIdentityParts(const ObjectAddress *object,
 						appendStringInfoString(&buffer,
 											   " on types");
 						break;
+				}
+
+				if (objname)
+				{
+					*objname = list_make1(username);
+					if (schema)
+						*objname = lappend(*objname, schema);
+					*objargs = list_make1(psprintf("%c", defacl->defaclobjtype));
 				}
 
 				systable_endscan(rcscan);
@@ -4066,7 +4401,7 @@ getObjectIdentityParts(const ObjectAddress *object,
 }
 
 static void
-getOpFamilyIdentity(StringInfo buffer, Oid opfid, List **objname, List **objargs)
+getOpFamilyIdentity(StringInfo buffer, Oid opfid, List **objname)
 {
 	HeapTuple	opfTup;
 	Form_pg_opfamily opfForm;
@@ -4092,11 +4427,9 @@ getOpFamilyIdentity(StringInfo buffer, Oid opfid, List **objname, List **objargs
 					 NameStr(amForm->amname));
 
 	if (objname)
-	{
-		*objname = list_make2(pstrdup(schema),
+		*objname = list_make3(pstrdup(NameStr(amForm->amname)),
+							  pstrdup(schema),
 							  pstrdup(NameStr(opfForm->opfname)));
-		*objargs = list_make1(pstrdup(NameStr(amForm->amname)));
-	}
 
 	ReleaseSysCache(amTup);
 	ReleaseSysCache(opfTup);

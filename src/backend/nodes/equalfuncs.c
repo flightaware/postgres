@@ -798,7 +798,10 @@ _equalSpecialJoinInfo(const SpecialJoinInfo *a, const SpecialJoinInfo *b)
 	COMPARE_SCALAR_FIELD(jointype);
 	COMPARE_SCALAR_FIELD(lhs_strict);
 	COMPARE_SCALAR_FIELD(delay_upper_joins);
-	COMPARE_NODE_FIELD(join_quals);
+	COMPARE_SCALAR_FIELD(semi_can_btree);
+	COMPARE_SCALAR_FIELD(semi_can_hash);
+	COMPARE_NODE_FIELD(semi_operators);
+	COMPARE_NODE_FIELD(semi_rhs_exprs);
 
 	return true;
 }
@@ -1500,10 +1503,6 @@ static bool
 _equalVacuumStmt(const VacuumStmt *a, const VacuumStmt *b)
 {
 	COMPARE_SCALAR_FIELD(options);
-	COMPARE_SCALAR_FIELD(freeze_min_age);
-	COMPARE_SCALAR_FIELD(freeze_table_age);
-	COMPARE_SCALAR_FIELD(multixact_freeze_min_age);
-	COMPARE_SCALAR_FIELD(multixact_freeze_table_age);
 	COMPARE_NODE_FIELD(relation);
 	COMPARE_NODE_FIELD(va_cols);
 

@@ -32,6 +32,10 @@ CREATE DOMAIN addr_nsp.gendomain AS int4 CONSTRAINT domconstr CHECK (value > 0);
 CREATE FUNCTION addr_nsp.trig() RETURNS TRIGGER LANGUAGE plpgsql AS $$ BEGIN END; $$;
 CREATE TRIGGER t BEFORE INSERT ON addr_nsp.gentable FOR EACH ROW EXECUTE PROCEDURE addr_nsp.trig();
 CREATE POLICY genpol ON addr_nsp.gentable;
+CREATE SERVER "integer" FOREIGN DATA WRAPPER addr_fdw;
+CREATE USER MAPPING FOR regtest_addr_user SERVER "integer";
+ALTER DEFAULT PRIVILEGES FOR ROLE regtest_addr_user IN SCHEMA public GRANT ALL ON TABLES TO regtest_addr_user;
+ALTER DEFAULT PRIVILEGES FOR ROLE regtest_addr_user REVOKE DELETE ON TABLES FROM regtest_addr_user;
 
 -- test some error cases
 SELECT pg_get_object_address('stone', '{}', '{}');
@@ -44,9 +48,7 @@ DECLARE
 	objtype text;
 BEGIN
 	FOR objtype IN VALUES ('toast table'), ('index column'), ('sequence column'),
-		('toast table column'), ('view column'), ('materialized view column'),
-		('operator of access method'), ('function of access method'),
-		('user mapping')
+		('toast table column'), ('view column'), ('materialized view column')
 	LOOP
 		BEGIN
 			PERFORM pg_get_object_address(objtype, '{one}', '{}');
@@ -72,7 +74,8 @@ BEGIN
 		('operator'), ('operator class'), ('operator family'), ('rule'), ('trigger'),
 		('text search parser'), ('text search dictionary'),
 		('text search template'), ('text search configuration'),
-		('policy')
+		('policy'), ('user mapping'), ('default acl'),
+		('operator of access method'), ('function of access method')
 	LOOP
 		FOR names IN VALUES ('{eins}'), ('{addr_nsp, zwei}'), ('{eins, zwei, drei}')
 		LOOP
@@ -138,10 +141,10 @@ WITH objects (type, name, args) AS (VALUES
 				('language', '{plpgsql}', '{}'),
 				-- large object
 				('operator', '{+}', '{int4, int4}'),
-				('operator class', '{int4_ops}', '{btree}'),
-				('operator family', '{integer_ops}', '{btree}'),
-				-- operator of access method
-				-- function of access method
+				('operator class', '{btree, int4_ops}', '{}'),
+				('operator family', '{btree, integer_ops}', '{}'),
+				('operator of access method', '{btree,integer_ops,1}', '{integer,integer}'),
+				('function of access method', '{btree,integer_ops,2}', '{integer,integer}'),
 				('rule', '{addr_nsp, genview, _RETURN}', '{}'),
 				('trigger', '{addr_nsp, gentable, t}', '{}'),
 				('schema', '{addr_nsp}', '{}'),
@@ -154,7 +157,9 @@ WITH objects (type, name, args) AS (VALUES
 				-- tablespace
 				('foreign-data wrapper', '{addr_fdw}', '{}'),
 				('server', '{addr_fserv}', '{}'),
-				-- user mapping
+				('user mapping', '{regtest_addr_user}', '{integer}'),
+				('default acl', '{regtest_addr_user,public}', '{r}'),
+				('default acl', '{regtest_addr_user}', '{r}'),
 				-- extension
 				-- event trigger
 				('policy', '{addr_nsp, gentable, genpol}', '{}')
@@ -166,7 +171,7 @@ SELECT (pg_identify_object(addr1.classid, addr1.objid, addr1.subobjid)).*,
 	  FROM objects, pg_get_object_address(type, name, args) addr1,
 			pg_identify_object_as_address(classid, objid, subobjid) ioa(typ,nms,args),
 			pg_get_object_address(typ, nms, ioa.args) as addr2
-	ORDER BY addr1.classid, addr1.objid;
+	ORDER BY addr1.classid, addr1.objid, addr1.subobjid;
 
 ---
 --- Cleanup resources
@@ -175,4 +180,5 @@ DROP FOREIGN DATA WRAPPER addr_fdw CASCADE;
 
 DROP SCHEMA addr_nsp CASCADE;
 
+DROP OWNED BY regtest_addr_user;
 DROP USER regtest_addr_user;

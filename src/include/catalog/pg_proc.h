@@ -895,6 +895,12 @@ DATA(insert OID = 515 (  array_larger	   PGNSP PGUID 12 1 0 0 0 f f f f t f i 2 
 DESCR("larger of two");
 DATA(insert OID = 516 (  array_smaller	   PGNSP PGUID 12 1 0 0 0 f f f f t f i 2 0 2277 "2277 2277" _null_ _null_ _null_ _null_ array_smaller _null_ _null_ _null_ ));
 DESCR("smaller of two");
+DATA(insert OID = 3277 (  array_offset		   PGNSP PGUID 12 1 0 0 0 f f f f f f i 2 0 23 "2277 2283" _null_ _null_ _null_ _null_ array_offset _null_ _null_ _null_ ));
+DESCR("returns a offset of value in array");
+DATA(insert OID = 3278 (  array_offset		   PGNSP PGUID 12 1 0 0 0 f f f f f f i 3 0 23 "2277 2283 23" _null_ _null_ _null_ _null_ array_offset_start _null_ _null_ _null_ ));
+DESCR("returns a offset of value in array with start index");
+DATA(insert OID = 3279 (  array_offsets		   PGNSP PGUID 12 1 0 0 0 f f f f f f i 2 0 1007 "2277 2283" _null_ _null_ _null_ _null_ array_offsets _null_ _null_ _null_ ));
+DESCR("returns a array of offsets of some value in array");
 DATA(insert OID = 1191 (  generate_subscripts PGNSP PGUID 12 1 1000 0 0 f f f f t t i 3 0 23 "2277 23 16" _null_ _null_ _null_ _null_ generate_subscripts _null_ _null_ _null_ ));
 DESCR("array subscripts generator");
 DATA(insert OID = 1192 (  generate_subscripts PGNSP PGUID 12 1 1000 0 0 f f f f t t i 2 0 23 "2277 23" _null_ _null_ _null_ _null_ generate_subscripts_nodir _null_ _null_ _null_ ));
@@ -2495,6 +2501,8 @@ DATA(insert OID = 3568 (  int4_accum_inv   PGNSP PGUID 12 1 0 0 0 f f f f f f i 
 DESCR("aggregate transition function");
 DATA(insert OID = 3569 (  int8_accum_inv   PGNSP PGUID 12 1 0 0 0 f f f f f f i 2 0 2281 "2281 20" _null_ _null_ _null_ _null_ int8_accum_inv _null_ _null_ _null_ ));
 DESCR("aggregate transition function");
+DATA(insert OID = 3387 (  int8_avg_accum_inv   PGNSP PGUID 12 1 0 0 0 f f f f f f i 2 0 2281 "2281 20" _null_ _null_ _null_ _null_ int8_avg_accum_inv _null_ _null_ _null_ ));
+DESCR("aggregate transition function");
 DATA(insert OID = 3178 (  numeric_sum	   PGNSP PGUID 12 1 0 0 0 f f f f f f i 1 0 1700 "2281" _null_ _null_ _null_ _null_ numeric_sum _null_ _null_ _null_ ));
 DESCR("aggregate final function");
 DATA(insert OID = 1837 (  numeric_avg	   PGNSP PGUID 12 1 0 0 0 f f f f f f i 1 0 1700 "2281" _null_ _null_ _null_ _null_ numeric_avg _null_ _null_ _null_ ));
@@ -2513,6 +2521,19 @@ DATA(insert OID = 1841 (  int4_sum		   PGNSP PGUID 12 1 0 0 0 f f f f f f i 2 0 
 DESCR("aggregate transition function");
 DATA(insert OID = 1842 (  int8_sum		   PGNSP PGUID 12 1 0 0 0 f f f f f f i 2 0 1700 "1700 20" _null_ _null_ _null_ _null_ int8_sum _null_ _null_ _null_ ));
 DESCR("aggregate transition function");
+DATA(insert OID = 3388 (  numeric_poly_sum	   PGNSP PGUID 12 1 0 0 0 f f f f f f i 1 0 1700 "2281" _null_ _null_ _null_ _null_ numeric_poly_sum _null_ _null_ _null_ ));
+DESCR("aggregate final function");
+DATA(insert OID = 3389 (  numeric_poly_avg	   PGNSP PGUID 12 1 0 0 0 f f f f f f i 1 0 1700 "2281" _null_ _null_ _null_ _null_ numeric_poly_avg _null_ _null_ _null_ ));
+DESCR("aggregate final function");
+DATA(insert OID = 3390 (  numeric_poly_var_pop  PGNSP PGUID 12 1 0 0 0 f f f f f f i 1 0 1700 "2281" _null_ _null_ _null_ _null_ numeric_poly_var_pop _null_ _null_ _null_ ));
+DESCR("aggregate final function");
+DATA(insert OID = 3391 (  numeric_poly_var_samp PGNSP PGUID 12 1 0 0 0 f f f f f f i 1 0 1700 "2281" _null_ _null_ _null_ _null_ numeric_poly_var_samp _null_ _null_ _null_ ));
+DESCR("aggregate final function");
+DATA(insert OID = 3392 (  numeric_poly_stddev_pop PGNSP PGUID 12 1 0 0 0 f f f f f f i 1 0 1700 "2281" _null_ _null_ _null_ _null_	numeric_poly_stddev_pop _null_ _null_ _null_ ));
+DESCR("aggregate final function");
+DATA(insert OID = 3393 (  numeric_poly_stddev_samp	PGNSP PGUID 12 1 0 0 0 f f f f f f i 1 0 1700 "2281" _null_ _null_ _null_ _null_ numeric_poly_stddev_samp _null_ _null_ _null_ ));
+DESCR("aggregate final function");
+
 DATA(insert OID = 1843 (  interval_accum   PGNSP PGUID 12 1 0 0 0 f f f f t f i 2 0 1187 "1187 1186" _null_ _null_ _null_ _null_ interval_accum _null_ _null_ _null_ ));
 DESCR("aggregate transition function");
 DATA(insert OID = 3549 (  interval_accum_inv   PGNSP PGUID 12 1 0 0 0 f f f f t f i 2 0 1187 "1187 1186" _null_ _null_ _null_ _null_ interval_accum_inv _null_ _null_ _null_ ));

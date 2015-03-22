@@ -21,9 +21,9 @@
 #define PARSENODES_H
 
 #include "nodes/bitmapset.h"
+#include "nodes/lockoptions.h"
 #include "nodes/primnodes.h"
 #include "nodes/value.h"
-#include "utils/lockwaitpolicy.h"
 
 /* Possible sources of a Query */
 typedef enum QuerySource
@@ -239,7 +239,8 @@ typedef enum A_Expr_Kind
 	AEXPR_BETWEEN,				/* name must be "BETWEEN" */
 	AEXPR_NOT_BETWEEN,			/* name must be "NOT BETWEEN" */
 	AEXPR_BETWEEN_SYM,			/* name must be "BETWEEN SYMMETRIC" */
-	AEXPR_NOT_BETWEEN_SYM		/* name must be "NOT BETWEEN SYMMETRIC" */
+	AEXPR_NOT_BETWEEN_SYM,		/* name must be "NOT BETWEEN SYMMETRIC" */
+	AEXPR_PAREN					/* nameless dummy node for parentheses */
 } A_Expr_Kind;
 
 typedef struct A_Expr
@@ -644,15 +645,6 @@ typedef struct DefElem
  * a location field --- currently, parse analysis insists on unqualified
  * names in LockingClause.)
  */
-typedef enum LockClauseStrength
-{
-	/* order is important -- see applyLockingClause */
-	LCS_FORKEYSHARE,
-	LCS_FORSHARE,
-	LCS_FORNOKEYUPDATE,
-	LCS_FORUPDATE
-} LockClauseStrength;
-
 typedef struct LockingClause
 {
 	NodeTag		type;
@@ -1231,6 +1223,8 @@ typedef struct SetOperationStmt
 typedef enum ObjectType
 {
 	OBJECT_AGGREGATE,
+	OBJECT_AMOP,
+	OBJECT_AMPROC,
 	OBJECT_ATTRIBUTE,			/* type's attribute, when distinct from column */
 	OBJECT_CAST,
 	OBJECT_COLUMN,
@@ -1238,6 +1232,7 @@ typedef enum ObjectType
 	OBJECT_CONVERSION,
 	OBJECT_DATABASE,
 	OBJECT_DEFAULT,
+	OBJECT_DEFACL,
 	OBJECT_DOMAIN,
 	OBJECT_DOMCONSTRAINT,
 	OBJECT_EVENT_TRIGGER,
@@ -1267,6 +1262,7 @@ typedef enum ObjectType
 	OBJECT_TSPARSER,
 	OBJECT_TSTEMPLATE,
 	OBJECT_TYPE,
+	OBJECT_USER_MAPPING,
 	OBJECT_VIEW
 } ObjectType;
 
@@ -2612,9 +2608,7 @@ typedef struct ClusterStmt
  *
  * Even though these are nominally two statements, it's convenient to use
  * just one node type for both.  Note that at least one of VACOPT_VACUUM
- * and VACOPT_ANALYZE must be set in options.  VACOPT_FREEZE is an internal
- * convenience for the grammar and is not examined at runtime --- the
- * freeze_min_age and freeze_table_age fields are what matter.
+ * and VACOPT_ANALYZE must be set in options.
  * ----------------------
  */
 typedef enum VacuumOption
@@ -2624,19 +2618,14 @@ typedef enum VacuumOption
 	VACOPT_VERBOSE = 1 << 2,	/* print progress info */
 	VACOPT_FREEZE = 1 << 3,		/* FREEZE option */
 	VACOPT_FULL = 1 << 4,		/* FULL (non-concurrent) vacuum */
-	VACOPT_NOWAIT = 1 << 5		/* don't wait to get lock (autovacuum only) */
+	VACOPT_NOWAIT = 1 << 5,		/* don't wait to get lock (autovacuum only) */
+	VACOPT_SKIPTOAST = 1 << 6	/* don't process the TOAST table, if any */
 } VacuumOption;
 
 typedef struct VacuumStmt
 {
 	NodeTag		type;
 	int			options;		/* OR of VacuumOption flags */
-	int			freeze_min_age; /* min freeze age, or -1 to use default */
-	int			freeze_table_age;		/* age at which to scan whole table */
-	int			multixact_freeze_min_age;		/* min multixact freeze age,
-												 * or -1 to use default */
-	int			multixact_freeze_table_age;		/* multixact age at which to
-												 * scan whole table */
 	RangeVar   *relation;		/* single table to process, or NULL */
 	List	   *va_cols;		/* list of column names, or NIL for all */
 } VacuumStmt;

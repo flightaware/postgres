@@ -132,7 +132,7 @@ char	   *GUC_check_errhint_string;
 static void
 do_serialize(char **destptr, Size *maxbytes, const char *fmt,...)
 /* This lets gcc check the format string for consistency. */
-__attribute__((format(PG_PRINTF_ATTRIBUTE, 3, 4)));
+pg_attribute_printf(3, 4);
 
 static void set_config_sourcefile(const char *name, char *sourcefile,
 					  int sourceline);
@@ -997,6 +997,16 @@ static struct config_bool ConfigureNamesBool[] =
 	},
 
 	{
+		{"wal_compression", PGC_USERSET, WAL_SETTINGS,
+			 gettext_noop("Compresses full-page writes written in WAL file."),
+			 NULL
+		},
+		&wal_compression,
+		false,
+		NULL, NULL, NULL
+	},
+
+	{
 		{"log_checkpoints", PGC_SIGHUP, LOGGING_WHAT,
 			gettext_noop("Logs each checkpoint."),
 			NULL
@@ -1599,6 +1609,16 @@ static struct config_bool ConfigureNamesBool[] =
 	},
 
 	{
+		{"operator_precedence_warning", PGC_USERSET, COMPAT_OPTIONS_PREVIOUS,
+			gettext_noop("Emit a warning for constructs that changed meaning since PostgreSQL 9.4."),
+			NULL,
+		},
+		&operator_precedence_warning,
+		false,
+		NULL, NULL, NULL
+	},
+
+	{
 		{"quote_all_identifiers", PGC_USERSET, COMPAT_OPTIONS_PREVIOUS,
 			gettext_noop("When generating SQL fragments, quote all identifiers."),
 			NULL,
@@ -2180,7 +2200,7 @@ static struct config_int ConfigureNamesInt[] =
 			GUC_UNIT_XSEGS
 		},
 		&max_wal_size,
-		8, 2, INT_MAX,
+		64, 2, INT_MAX,
 		NULL, assign_max_wal_size, NULL
 	},
 

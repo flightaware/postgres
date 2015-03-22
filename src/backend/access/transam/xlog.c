@@ -79,7 +79,7 @@ extern uint32 bootstrap_data_checksum_version;
 
 
 /* User-settable parameters */
-int			max_wal_size = 8;		/* 128 MB */
+int			max_wal_size = 64;		/* 1 GB */
 int			min_wal_size = 5;		/* 80 MB */
 int			wal_keep_segments = 0;
 int			XLOGbuffers = -1;
@@ -89,6 +89,7 @@ char	   *XLogArchiveCommand = NULL;
 bool		EnableHotStandby = false;
 bool		fullPageWrites = true;
 bool		wal_log_hints = false;
+bool		wal_compression = false;
 bool		log_checkpoints = false;
 int			sync_method = DEFAULT_SYNC_METHOD;
 int			wal_level = WAL_LEVEL_MINIMAL;
@@ -4772,7 +4773,6 @@ readRecoveryCommandFile(void)
 	ConfigVariable *item,
 			   *head = NULL,
 			   *tail = NULL;
-	bool		recoveryPauseAtTargetSet = false;
 	bool		recoveryTargetActionSet = false;
 
 
@@ -4817,25 +4817,6 @@ readRecoveryCommandFile(void)
 			ereport(DEBUG2,
 					(errmsg_internal("archive_cleanup_command = '%s'",
 									 archiveCleanupCommand)));
-		}
-		else if (strcmp(item->name, "pause_at_recovery_target") == 0)
-		{
-			bool recoveryPauseAtTarget;
-
-			if (!parse_bool(item->value, &recoveryPauseAtTarget))
-				ereport(ERROR,
-						(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
-						 errmsg("parameter \"%s\" requires a Boolean value", "pause_at_recovery_target")));
-
-			ereport(DEBUG2,
-					(errmsg_internal("pause_at_recovery_target = '%s'",
-									 item->value)));
-
-			recoveryTargetAction = recoveryPauseAtTarget ?
-									 RECOVERY_TARGET_ACTION_PAUSE :
-									 RECOVERY_TARGET_ACTION_PROMOTE;
-
-			recoveryPauseAtTargetSet = true;
 		}
 		else if (strcmp(item->name, "recovery_target_action") == 0)
 		{
@@ -5022,18 +5003,6 @@ readRecoveryCommandFile(void)
 	}
 
 	/*
-	 * Check for mutually exclusive parameters
-	 */
-	if (recoveryPauseAtTargetSet && recoveryTargetActionSet)
-		ereport(ERROR,
-				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
-				 errmsg("cannot set both \"%s\" and \"%s\" recovery parameters",
-						"pause_at_recovery_target",
-						"recovery_target_action"),
-				 errhint("The \"pause_at_recovery_target\" is deprecated.")));
-
-
-	/*
 	 * Override any inconsistent requests. Not that this is a change
 	 * of behaviour in 9.5; prior to this we simply ignored a request
 	 * to pause if hot_standby = off, which was surprising behaviour.
@@ -5199,37 +5168,25 @@ exitArchiveRecovery(TimeLineID endTLI, XLogRecPtr endOfLog)
 static bool
 getRecordTimestamp(XLogReaderState *record, TimestampTz *recordXtime)
 {
-	uint8		record_info = XLogRecGetInfo(record) & ~XLR_INFO_MASK;
+	uint8		info = XLogRecGetInfo(record) & ~XLR_INFO_MASK;
+	uint8		xact_info = info & XLOG_XACT_OPMASK;
 	uint8		rmid = XLogRecGetRmid(record);
 
-	if (rmid == RM_XLOG_ID && record_info == XLOG_RESTORE_POINT)
+	if (rmid == RM_XLOG_ID && info == XLOG_RESTORE_POINT)
 	{
 		*recordXtime = ((xl_restore_point *) XLogRecGetData(record))->rp_time;
 		return true;
 	}
-	if (rmid == RM_XACT_ID && record_info == XLOG_XACT_COMMIT_COMPACT)
-	{
-		*recordXtime = ((xl_xact_commit_compact *) XLogRecGetData(record))->xact_time;
-		return true;
-	}
-	if (rmid == RM_XACT_ID && record_info == XLOG_XACT_COMMIT)
+	if (rmid == RM_XACT_ID && (xact_info == XLOG_XACT_COMMIT ||
+							   xact_info == XLOG_XACT_COMMIT_PREPARED))
 	{
 		*recordXtime = ((xl_xact_commit *) XLogRecGetData(record))->xact_time;
 		return true;
 	}
-	if (rmid == RM_XACT_ID && record_info == XLOG_XACT_COMMIT_PREPARED)
-	{
-		*recordXtime = ((xl_xact_commit_prepared *) XLogRecGetData(record))->crec.xact_time;
-		return true;
-	}
-	if (rmid == RM_XACT_ID && record_info == XLOG_XACT_ABORT)
+	if (rmid == RM_XACT_ID && (xact_info == XLOG_XACT_ABORT ||
+							   xact_info == XLOG_XACT_ABORT_PREPARED))
 	{
 		*recordXtime = ((xl_xact_abort *) XLogRecGetData(record))->xact_time;
-		return true;
-	}
-	if (rmid == RM_XACT_ID && record_info == XLOG_XACT_ABORT_PREPARED)
-	{
-		*recordXtime = ((xl_xact_abort_prepared *) XLogRecGetData(record))->arec.xact_time;
 		return true;
 	}
 	return false;
@@ -5247,7 +5204,7 @@ static bool
 recoveryStopsBefore(XLogReaderState *record)
 {
 	bool		stopsHere = false;
-	uint8		record_info;
+	uint8		xact_info;
 	bool		isCommit;
 	TimestampTz recordXtime = 0;
 	TransactionId recordXid;
@@ -5268,27 +5225,40 @@ recoveryStopsBefore(XLogReaderState *record)
 	/* Otherwise we only consider stopping before COMMIT or ABORT records. */
 	if (XLogRecGetRmid(record) != RM_XACT_ID)
 		return false;
-	record_info = XLogRecGetInfo(record) & ~XLR_INFO_MASK;
 
-	if (record_info == XLOG_XACT_COMMIT_COMPACT || record_info == XLOG_XACT_COMMIT)
+	xact_info = XLogRecGetInfo(record) & XLOG_XACT_OPMASK;
+
+	if (xact_info == XLOG_XACT_COMMIT)
 	{
 		isCommit = true;
 		recordXid = XLogRecGetXid(record);
 	}
-	else if (record_info == XLOG_XACT_COMMIT_PREPARED)
+	else if (xact_info == XLOG_XACT_COMMIT_PREPARED)
 	{
+		xl_xact_commit *xlrec = (xl_xact_commit *) XLogRecGetData(record);
+		xl_xact_parsed_commit parsed;
+
 		isCommit = true;
-		recordXid = ((xl_xact_commit_prepared *) XLogRecGetData(record))->xid;
+		ParseCommitRecord(XLogRecGetInfo(record),
+						  xlrec,
+						  &parsed);
+		recordXid = parsed.twophase_xid;
 	}
-	else if (record_info == XLOG_XACT_ABORT)
+	else if (xact_info == XLOG_XACT_ABORT)
 	{
 		isCommit = false;
 		recordXid = XLogRecGetXid(record);
 	}
-	else if (record_info == XLOG_XACT_ABORT_PREPARED)
+	else if (xact_info == XLOG_XACT_ABORT_PREPARED)
 	{
-		isCommit = false;
-		recordXid = ((xl_xact_abort_prepared *) XLogRecGetData(record))->xid;
+		xl_xact_abort *xlrec = (xl_xact_abort *) XLogRecGetData(record);
+		xl_xact_parsed_abort parsed;
+
+		isCommit = true;
+		ParseAbortRecord(XLogRecGetInfo(record),
+						 xlrec,
+						 &parsed);
+		recordXid = parsed.twophase_xid;
 	}
 	else
 		return false;
@@ -5356,11 +5326,12 @@ recoveryStopsBefore(XLogReaderState *record)
 static bool
 recoveryStopsAfter(XLogReaderState *record)
 {
-	uint8		record_info;
+	uint8		info;
+	uint8		xact_info;
 	uint8		rmid;
 	TimestampTz recordXtime;
 
-	record_info = XLogRecGetInfo(record) & ~XLR_INFO_MASK;
+	info = XLogRecGetInfo(record) & ~XLR_INFO_MASK;
 	rmid = XLogRecGetRmid(record);
 
 	/*
@@ -5368,7 +5339,7 @@ recoveryStopsAfter(XLogReaderState *record)
 	 * the first one.
 	 */
 	if (recoveryTarget == RECOVERY_TARGET_NAME &&
-		rmid == RM_XLOG_ID && record_info == XLOG_RESTORE_POINT)
+		rmid == RM_XLOG_ID && info == XLOG_RESTORE_POINT)
 	{
 		xl_restore_point *recordRestorePointData;
 
@@ -5389,12 +5360,15 @@ recoveryStopsAfter(XLogReaderState *record)
 		}
 	}
 
-	if (rmid == RM_XACT_ID &&
-		(record_info == XLOG_XACT_COMMIT_COMPACT ||
-		 record_info == XLOG_XACT_COMMIT ||
-		 record_info == XLOG_XACT_COMMIT_PREPARED ||
-		 record_info == XLOG_XACT_ABORT ||
-		 record_info == XLOG_XACT_ABORT_PREPARED))
+	if (rmid != RM_XACT_ID)
+		return false;
+
+	xact_info = info & XLOG_XACT_OPMASK;
+
+	if (xact_info == XLOG_XACT_COMMIT ||
+		xact_info == XLOG_XACT_COMMIT_PREPARED ||
+		xact_info == XLOG_XACT_ABORT ||
+		xact_info == XLOG_XACT_ABORT_PREPARED)
 	{
 		TransactionId recordXid;
 
@@ -5403,10 +5377,26 @@ recoveryStopsAfter(XLogReaderState *record)
 			SetLatestXTime(recordXtime);
 
 		/* Extract the XID of the committed/aborted transaction */
-		if (record_info == XLOG_XACT_COMMIT_PREPARED)
-			recordXid = ((xl_xact_commit_prepared *) XLogRecGetData(record))->xid;
-		else if (record_info == XLOG_XACT_ABORT_PREPARED)
-			recordXid = ((xl_xact_abort_prepared *) XLogRecGetData(record))->xid;
+		if (xact_info == XLOG_XACT_COMMIT_PREPARED)
+		{
+			xl_xact_commit *xlrec = (xl_xact_commit *) XLogRecGetData(record);
+			xl_xact_parsed_commit parsed;
+
+			ParseCommitRecord(XLogRecGetInfo(record),
+							  xlrec,
+							  &parsed);
+			recordXid = parsed.twophase_xid;
+		}
+		else if (xact_info == XLOG_XACT_ABORT_PREPARED)
+		{
+			xl_xact_abort *xlrec = (xl_xact_abort *) XLogRecGetData(record);
+			xl_xact_parsed_abort parsed;
+
+			ParseAbortRecord(XLogRecGetInfo(record),
+							 xlrec,
+							 &parsed);
+			recordXid = parsed.twophase_xid;
+		}
 		else
 			recordXid = XLogRecGetXid(record);
 
@@ -5427,17 +5417,16 @@ recoveryStopsAfter(XLogReaderState *record)
 			recoveryStopTime = recordXtime;
 			recoveryStopName[0] = '\0';
 
-			if (record_info == XLOG_XACT_COMMIT_COMPACT ||
-				record_info == XLOG_XACT_COMMIT ||
-				record_info == XLOG_XACT_COMMIT_PREPARED)
+			if (xact_info == XLOG_XACT_COMMIT ||
+				xact_info == XLOG_XACT_COMMIT_PREPARED)
 			{
 				ereport(LOG,
 						(errmsg("recovery stopping after commit of transaction %u, time %s",
 								recoveryStopXid,
 								timestamptz_to_str(recoveryStopTime))));
 			}
-			else if (record_info == XLOG_XACT_ABORT ||
-					 record_info == XLOG_XACT_ABORT_PREPARED)
+			else if (xact_info == XLOG_XACT_ABORT ||
+					 xact_info == XLOG_XACT_ABORT_PREPARED)
 			{
 				ereport(LOG,
 						(errmsg("recovery stopping after abort of transaction %u, time %s",
@@ -5525,7 +5514,7 @@ SetRecoveryPause(bool recoveryPause)
 static bool
 recoveryApplyDelay(XLogReaderState *record)
 {
-	uint8		record_info;
+	uint8		xact_info;
 	TimestampTz xtime;
 	long		secs;
 	int			microsecs;
@@ -5542,11 +5531,13 @@ recoveryApplyDelay(XLogReaderState *record)
 	 * so there is already opportunity for issues caused by early conflicts on
 	 * standbys.
 	 */
-	record_info = XLogRecGetInfo(record) & ~XLR_INFO_MASK;
-	if (!(XLogRecGetRmid(record) == RM_XACT_ID &&
-		  (record_info == XLOG_XACT_COMMIT_COMPACT ||
-		   record_info == XLOG_XACT_COMMIT ||
-		   record_info == XLOG_XACT_COMMIT_PREPARED)))
+	if (XLogRecGetRmid(record) != RM_XACT_ID)
+		return false;
+
+	xact_info = XLogRecGetInfo(record) & XLOG_XACT_COMMIT;
+
+	if (xact_info != XLOG_XACT_COMMIT &&
+		xact_info != XLOG_XACT_COMMIT_PREPARED)
 		return false;
 
 	if (!getRecordTimestamp(record, &xtime))
