@@ -3156,13 +3156,15 @@ exec_stmt_assert(PLpgSQL_execstate *estate, PLpgSQL_stmt_assert *stmt)
 
 		if (stmt->hint != NULL)
 		{
-			Oid			expr_typeid;
+			Oid				expr_typeid;
 			bool			expr_isnull;
 			Datum			expr_val;
+			int32			expr_typmod;
 
 			expr_val = exec_eval_expr(estate, stmt->hint,
 									 &expr_isnull,
-									 &expr_typeid);
+									 &expr_typeid,
+									 &expr_typmod);
 
 			if (!expr_isnull)
 				err_hint = pstrdup(convert_value_to_string(estate, expr_val, expr_typeid));
