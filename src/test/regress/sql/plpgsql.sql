@@ -4217,3 +4217,52 @@ select outer_outer_func(20);
 drop function outer_outer_func(int);
 drop function outer_func(int);
 drop function inner_func(int);
+
+-- ensure enabled user assertions
+set enable_user_asserts = on;
+
+-- should be ok
+do $$
+begin 
+  assert 1=1;
+end;
+$$;
+
+-- should fail
+do $$
+begin
+  assert 1=0;
+end;
+$$;
+
+-- should fail
+do $$
+begin
+  assert NULL;
+end;
+$$;
+
+-- should fail
+-- test of warning, when message related to a assert is null
+do $$
+begin
+  assert 1=0, NULL;
+end;
+$$;
+
+-- should fail
+do $$
+declare var text := 'some value';
+begin
+  assert 1=0, format('content of var: "%s"', var);
+end;
+$$;
+
+-- ensure asserts are not trapped by 'others'
+do $$
+begin
+  assert 1=0, 'unhandled assert';
+exception when others then
+  null; -- do nothing
+end;
+$$ language plpgsql;

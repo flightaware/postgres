@@ -3373,6 +3373,9 @@ END LOOP <optional> <replaceable>label</replaceable> </optional>;
   <sect1 id="plpgsql-errors-and-messages">
    <title>Errors and Messages</title>
 
+  <sect2 id="plpgsql-statements-raise">
+    <title>RAISE statement</title>
+
    <indexterm>
     <primary>RAISE</primary>
    </indexterm>
@@ -3565,7 +3568,33 @@ RAISE unique_violation USING MESSAGE = 'Duplicate user ID: ' || user_id;
      the whole category.
     </para>
    </note>
+  </sect2>
 
+  <sect2 id="plpgsql-statements-assert">
+    <title>ASSERT statement</title>
+
+   <indexterm>
+    <primary>ASSERT</primary>
+   </indexterm>
+
+   <indexterm>
+    <primary>assertions</primary>
+    <secondary>in PL/pgSQL</secondary>
+   </indexterm>
+
+   <para>
+    Use the <command>ASSERT</command> statement to ensure the
+    predicate is allways true. If the predicate is false or is null,
+    then a assertion exception is raised.
+
+<synopsis>
+ASSERT <replaceable class="parameter">expression</replaceable> <optional>, <replaceable class="parameter">message expression</replaceable> </optional>;
+</synopsis>
+
+    The user assertions can be enabled or disabled via
+    <xref linkend="guc-enable-user-asserts">.
+   </para>
+  </sect2>
  </sect1>
 
  <sect1 id="plpgsql-trigger">

@@ -5377,3 +5377,63 @@ NOTICE:  outer_func() done
 drop function outer_outer_func(int);
 drop function outer_func(int);
 drop function inner_func(int);
+-- ensure enabled user assertions
+set enable_user_asserts = on;
+-- should be ok
+do $$
+begin 
+  assert 1=1;
+end;
+$$;
+-- should fail
+do $$
+begin
+  assert 1=0;
+end;
+$$;
+ERROR:  Assertion failure
+DETAIL:  "1=0" is false
+CONTEXT:  PL/pgSQL function inline_code_block line 3 at ASSERT
+-- should fail
+do $$
+begin
+  assert NULL;
+end;
+$$;
+ERROR:  Assertion failure
+DETAIL:  "NULL" is null
+CONTEXT:  PL/pgSQL function inline_code_block line 3 at ASSERT
+-- should fail
+-- test of warning, when message related to a assert is null
+do $$
+begin
+  assert 1=0, NULL;
+end;
+$$;
+ERROR:  Assertion failure
+DETAIL:  "1=0" is false
+HINT:  Message attached to failed assertion is null
+CONTEXT:  PL/pgSQL function inline_code_block line 3 at ASSERT
+-- should fail
+do $$
+declare var text := 'some value';
+begin
+  assert 1=0, format('content of var: "%s"', var);
+end;
+$$;
+ERROR:  Assertion failure
+DETAIL:  "1=0" is false
+HINT:  content of var: "some value"
+CONTEXT:  PL/pgSQL function inline_code_block line 4 at ASSERT
+-- assertions is unhandled
+do $$
+begin
+  assert 1=0, 'unhandled assert';
+exception when others then
+  null; -- do nothing
+end;
+$$ language plpgsql;
+ERROR:  Assertion failure
+DETAIL:  "1=0" is false
+HINT:  unhandled assert
+CONTEXT:  PL/pgSQL function inline_code_block line 3 at ASSERT

@@ -153,6 +153,8 @@ static int exec_stmt_return_query(PLpgSQL_execstate *estate,
 					   PLpgSQL_stmt_return_query *stmt);
 static int exec_stmt_raise(PLpgSQL_execstate *estate,
 				PLpgSQL_stmt_raise *stmt);
+static int exec_stmt_assert(PLpgSQL_execstate *estate,
+				PLpgSQL_stmt_assert *stmt);
 static int exec_stmt_execsql(PLpgSQL_execstate *estate,
 				  PLpgSQL_stmt_execsql *stmt);
 static int exec_stmt_dynexecute(PLpgSQL_execstate *estate,
@@ -1027,12 +1029,14 @@ exception_matches_conditions(ErrorData *edata, PLpgSQL_condition *cond)
 		int			sqlerrstate = cond->sqlerrstate;
 
 		/*
-		 * OTHERS matches everything *except* query-canceled; if you're
-		 * foolish enough, you can match that explicitly.
+		 * OTHERS matches everything *except* query-canceled and
+		 * assert-exception. if you're foolish enough, you can 
+		 * match those explicitly.
 		 */
 		if (sqlerrstate == 0)
 		{
-			if (edata->sqlerrcode != ERRCODE_QUERY_CANCELED)
+			if (edata->sqlerrcode != ERRCODE_QUERY_CANCELED &&
+				 edata->sqlerrcode != ERRCODE_ASSERT_EXCEPTION)
 				return true;
 		}
 		/* Exact match? */
@@ -1469,6 +1473,10 @@ exec_stmt(PLpgSQL_execstate *estate, PLpgSQL_stmt *stmt)
 
 		case PLPGSQL_STMT_RAISE:
 			rc = exec_stmt_raise(estate, (PLpgSQL_stmt_raise *) stmt);
+			break;
+
+		case PLPGSQL_STMT_ASSERT:
+			rc = exec_stmt_assert(estate, (PLpgSQL_stmt_assert *) stmt);
 			break;
 
 		case PLPGSQL_STMT_EXECSQL:
@@ -3121,6 +3129,62 @@ exec_stmt_raise(PLpgSQL_execstate *estate, PLpgSQL_stmt_raise *stmt)
 	return PLPGSQL_RC_OK;
 }
 
+/* ----------
+ * exec_stmt_assert			Assert statement
+ * ----------
+ */
+static int
+exec_stmt_assert(PLpgSQL_execstate *estate, PLpgSQL_stmt_assert *stmt)
+{
+	bool		value;
+	bool		isnull;
+
+	/* do nothing when asserts are not enabled */
+	if (!enable_user_asserts)
+		return PLPGSQL_RC_OK;
+
+	value = exec_eval_boolean(estate, stmt->cond, &isnull);
+	exec_eval_cleanup(estate);
+
+	if (isnull || !value)
+	{
+		StringInfoData		ds;
+		char *err_hint = NULL;
+
+		initStringInfo(&ds);
+
+		if (isnull)
+			appendStringInfo(&ds, "\"%s\" is null", stmt->cond->query + 7);
+		else
+			appendStringInfo(&ds, "\"%s\" is false", stmt->cond->query + 7);
+
+		if (stmt->hint != NULL)
+		{
+			Oid			expr_typeid;
+			bool			expr_isnull;
+			Datum			expr_val;
+
+			expr_val = exec_eval_expr(estate, stmt->hint,
+									 &expr_isnull,
+									 &expr_typeid);
+
+			if (!expr_isnull)
+				err_hint = pstrdup(convert_value_to_string(estate, expr_val, expr_typeid));
+			else
+				err_hint = pstrdup("Message attached to failed assertion is null");
+
+			exec_eval_cleanup(estate);
+		}
+
+		ereport(ERROR,
+				(errcode(ERRCODE_ASSERT_EXCEPTION),
+				 errmsg("Assertion failure"),
+				 errdetail("%s", ds.data),
+				 (err_hint != NULL) ? errhint("%s", err_hint) : 0));
+	}
+
+	return PLPGSQL_RC_OK;
+}
 
 /* ----------
  * Initialize a mostly empty execution state
