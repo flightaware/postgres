@@ -5425,7 +5425,7 @@ ERROR:  Assertion failure
 DETAIL:  "1=0" is false
 HINT:  content of var: "some value"
 CONTEXT:  PL/pgSQL function inline_code_block line 4 at ASSERT
--- assertions is unhandled
+-- ensure asserts are not trapped by 'others'
 do $$
 begin
   assert 1=0, 'unhandled assert';
