@@ -1058,6 +1058,15 @@ static struct config_bool ConfigureNamesBool[] =
 	},
 
 	{
+		{"enable_user_asserts", PGC_USERSET, ERROR_HANDLING_OPTIONS,
+			gettext_noop("Enable user assert checks."),
+			NULL
+		},
+		&enable_user_asserts,
+		true,
+		NULL, NULL, NULL
+	},
+	{
 		{"exit_on_error", PGC_USERSET, ERROR_HANDLING_OPTIONS,
 			gettext_noop("Terminate session on any error."),
 			NULL

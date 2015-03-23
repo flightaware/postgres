@@ -80,6 +80,7 @@ enum
 enum PLpgSQL_stmt_types
 {
 	PLPGSQL_STMT_BLOCK,
+	PLPGSQL_STMT_ASSERT,
 	PLPGSQL_STMT_ASSIGN,
 	PLPGSQL_STMT_IF,
 	PLPGSQL_STMT_CASE,
@@ -630,6 +631,14 @@ typedef struct
 	PLpgSQL_expr *expr;
 } PLpgSQL_raise_option;
 
+
+typedef struct
+{								/* ASSERT statement			*/
+	int			cmd_type;
+	int			lineno;
+	PLpgSQL_expr *cond;
+	PLpgSQL_expr *hint;
+} PLpgSQL_stmt_assert;
 
 typedef struct
 {								/* Generic SQL statement to execute */

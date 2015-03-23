@@ -149,6 +149,7 @@ extern bool IsBackgroundWorker;
 extern PGDLLIMPORT bool IsBinaryUpgrade;
 
 extern bool ExitOnAnyError;
+extern bool enable_user_asserts;
 
 extern PGDLLIMPORT char *DataDir;
 

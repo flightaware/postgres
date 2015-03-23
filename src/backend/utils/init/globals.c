@@ -99,6 +99,7 @@ bool		IsBinaryUpgrade = false;
 bool		IsBackgroundWorker = false;
 
 bool		ExitOnAnyError = false;
+bool		enable_user_asserts = true;
 
 int			DateStyle = USE_ISO_DATES;
 int			DateOrder = DATEORDER_MDY;

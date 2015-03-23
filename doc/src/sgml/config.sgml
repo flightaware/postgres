@@ -6999,6 +6999,20 @@ dynamic_library_path = 'C:\tools\postgresql;H:\my_project\lib;$libdir'
 
     <variablelist>
 
+     <varlistentry id="guc-enable-user-asserts" xreflabel="enable_user_asserts">
+      <term><varname>enable_user_asserts</varname> (<type>boolean</type>)
+      <indexterm>
+       <primary><varname>enable_user_asserts</> configuration parameter</primary>
+      </indexterm>
+      </term>
+      <listitem>
+       <para>
+        If true, any user assertions are evaluated.  By default, this 
+        is set to true.
+       </para>
+      </listitem>
+     </varlistentry>
+
      <varlistentry id="guc-exit-on-error" xreflabel="exit_on_error">
       <term><varname>exit_on_error</varname> (<type>boolean</type>)
       <indexterm>
