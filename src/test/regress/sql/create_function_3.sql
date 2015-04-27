@@ -19,10 +19,14 @@ CREATE FUNCTION functest_A_2(text[]) RETURNS int LANGUAGE 'sql'
        AS 'SELECT $1[0]::int';
 CREATE FUNCTION functest_A_3() RETURNS bool LANGUAGE 'sql'
        AS 'SELECT false';
+CREATE FUNCTION functest_A_4(record) RETURNS regtype LANGUAGE 'sql'
+       AS 'SELECT pg_catalog.pg_typeof($1)';
+SELECT functest_A_4(NULL::pg_catalog.pg_class);
 SELECT proname, prorettype::regtype, proargtypes::regtype[] FROM pg_proc
        WHERE oid in ('functest_A_1'::regproc,
                      'functest_A_2'::regproc,
-                     'functest_A_3'::regproc) ORDER BY proname;
+                     'functest_A_3'::regproc,
+                     'functest_A_4'::regproc) ORDER BY proname;
 
 --
 -- IMMUTABLE | STABLE | VOLATILE

@@ -870,14 +870,18 @@ fmgr_sql_validator(PG_FUNCTION_ARGS)
 				 errmsg("SQL functions cannot return type %s",
 						format_type_be(proc->prorettype))));
 
-	/* Disallow pseudotypes in arguments */
-	/* except for polymorphic */
+	/*
+	 * Disallow pseudotypes in arguments except for polymorphic and record. In
+	 * the context of validating a function, record may as well be polymorphic,
+	 * so treat it as such.
+	 */
 	haspolyarg = false;
 	for (i = 0; i < proc->pronargs; i++)
 	{
 		if (get_typtype(proc->proargtypes.values[i]) == TYPTYPE_PSEUDO)
 		{
-			if (IsPolymorphicType(proc->proargtypes.values[i]))
+			if (IsPolymorphicType(proc->proargtypes.values[i]) ||
+				proc->proargtypes.values[i] == RECORDOID)
 				haspolyarg = true;
 			else
 				ereport(ERROR,

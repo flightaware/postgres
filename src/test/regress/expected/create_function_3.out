@@ -16,16 +16,26 @@ CREATE FUNCTION functest_A_2(text[]) RETURNS int LANGUAGE 'sql'
        AS 'SELECT $1[0]::int';
 CREATE FUNCTION functest_A_3() RETURNS bool LANGUAGE 'sql'
        AS 'SELECT false';
+CREATE FUNCTION functest_A_4(record) RETURNS regtype LANGUAGE 'sql'
+       AS 'SELECT pg_catalog.pg_typeof($1)';
+SELECT functest_A_4(NULL::pg_catalog.pg_class);
+ functest_a_4 
+--------------
+ pg_class
+(1 row)
+
 SELECT proname, prorettype::regtype, proargtypes::regtype[] FROM pg_proc
        WHERE oid in ('functest_A_1'::regproc,
                      'functest_A_2'::regproc,
-                     'functest_A_3'::regproc) ORDER BY proname;
+                     'functest_A_3'::regproc,
+                     'functest_A_4'::regproc) ORDER BY proname;
    proname    | prorettype |    proargtypes    
 --------------+------------+-------------------
  functest_a_1 | boolean    | [0:1]={text,date}
  functest_a_2 | integer    | [0:0]={text[]}
  functest_a_3 | boolean    | {}
-(3 rows)
+ functest_a_4 | regtype    | [0:0]={record}
+(4 rows)
 
 --
 -- IMMUTABLE | STABLE | VOLATILE
@@ -219,10 +229,11 @@ SELECT routine_name, ordinal_position, parameter_name, parameter_default
 
 -- Cleanups
 DROP SCHEMA temp_func_test CASCADE;
-NOTICE:  drop cascades to 19 other objects
+NOTICE:  drop cascades to 20 other objects
 DETAIL:  drop cascades to function functest_a_1(text,date)
 drop cascades to function functest_a_2(text[])
 drop cascades to function functest_a_3()
+drop cascades to function functest_a_4(record)
 drop cascades to function functest_b_1(integer)
 drop cascades to function functest_b_2(integer)
 drop cascades to function functest_b_3(integer)
