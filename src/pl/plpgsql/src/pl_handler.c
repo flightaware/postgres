@@ -442,7 +442,8 @@ plpgsql_validator(PG_FUNCTION_ARGS)
 	{
 		if (get_typtype(argtypes[i]) == TYPTYPE_PSEUDO)
 		{
-			if (!IsPolymorphicType(argtypes[i]))
+			if (!IsPolymorphicType(argtypes[i]) &&
+				argtypes[i] != RECORDOID)
 				ereport(ERROR,
 						(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
 						 errmsg("PL/pgSQL functions cannot accept type %s",

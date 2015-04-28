@@ -430,7 +430,8 @@ do_compile(FunctionCallInfo fcinfo,
 				/* (note we already replaced polymorphic types) */
 				/* (build_variable would do this, but wrong message) */
 				if (argdtype->ttype != PLPGSQL_TTYPE_SCALAR &&
-					argdtype->ttype != PLPGSQL_TTYPE_ROW)
+					argdtype->ttype != PLPGSQL_TTYPE_ROW &&
+					argdtype->ttype != PLPGSQL_TTYPE_REC)
 					ereport(ERROR,
 							(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
 						   errmsg("PL/pgSQL functions cannot accept type %s",

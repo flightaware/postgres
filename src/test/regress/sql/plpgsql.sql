@@ -1623,7 +1623,16 @@ begin
   return next;
 end$$ language plpgsql;
 
-select * from f1(42);
+\set VERBOSITY verbose
+create function f2(r record, OUT typ regtype, OUT rec record) as $$
+begin
+--  typ := pg_typeof(r);
+
+  rec := r;
+end$$ language plpgsql;
+
+select *, f2(row(f1.*)), f2(NULL::pg_class) from f1(42);
+\set VERBOSITY default
 
 drop function f1(int);
 

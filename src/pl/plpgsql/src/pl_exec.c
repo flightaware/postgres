@@ -335,6 +335,30 @@ plpgsql_exec_function(PLpgSQL_function *func, FunctionCallInfo fcinfo,
 				}
 				break;
 
+			case PLPGSQL_DTYPE_REC:
+				{
+					/*
+					 * Target is a record variable
+					 */
+					PLpgSQL_rec *rec = (PLpgSQL_rec *) estate.datums[n];
+
+					if (!fcinfo->argnull[i])
+					{
+						exec_move_row_from_datum(&estate, rec, NULL,
+												 fcinfo->arg[i]);
+					}
+					else
+					{
+						/* If source is null, just assign nulls to the record */
+						//exec_move_row(&estate, rec, NULL, NULL, NULL);
+						exec_move_row_from_datum(&estate, rec, NULL,
+												 fcinfo->arg[i]);
+					}
+					/* clean up after exec_move_row() */
+					exec_eval_cleanup(&estate);
+				}
+				break;
+
 			default:
 				elog(ERROR, "unrecognized dtype: %d", func->datums[i]->dtype);
 		}
