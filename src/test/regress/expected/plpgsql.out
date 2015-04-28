@@ -1828,13 +1828,28 @@ begin
   k := 'foot';
   return next;
 end$$ language plpgsql;
-select * from f1(42);
- j  |  k   
-----+------
- 43 | foo
- 44 | foot
+\set VERBOSITY verbose
+create function f2(r record) returns regtype as $$
+begin
+  raise notice 'r = %', r;
+  return pg_typeof(r);
+end$$ language plpgsql;
+select *, row(f2(row(f1.*))), row(f2((SELECT row(d.*) FROM pg_shdescription d LIMIT 1))) from f1(42);
+NOTICE:  00000: r = (43,foo)
+LOCATION:  exec_stmt_raise, pl_exec.c:3126
+NOTICE:  00000: r = (1,1262,"default template for new databases")
+LOCATION:  exec_stmt_raise, pl_exec.c:3126
+NOTICE:  00000: r = (44,foot)
+LOCATION:  exec_stmt_raise, pl_exec.c:3126
+NOTICE:  00000: r = (1,1262,"default template for new databases")
+LOCATION:  exec_stmt_raise, pl_exec.c:3126
+ j  |  k   |   row    |   row    
+----+------+----------+----------
+ 43 | foo  | (record) | (record)
+ 44 | foot | (record) | (record)
 (2 rows)
 
+\set VERBOSITY default
 drop function f1(int);
 create function duplic(in i anyelement, out j anyelement, out k anyarray) as $$
 begin

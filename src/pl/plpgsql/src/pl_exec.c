@@ -350,9 +350,7 @@ plpgsql_exec_function(PLpgSQL_function *func, FunctionCallInfo fcinfo,
 					else
 					{
 						/* If source is null, just assign nulls to the record */
-						//exec_move_row(&estate, rec, NULL, NULL, NULL);
-						exec_move_row_from_datum(&estate, rec, NULL,
-												 fcinfo->arg[i]);
+						exec_move_row(&estate, rec, NULL, NULL, NULL);
 					}
 					/* clean up after exec_move_row() */
 					exec_eval_cleanup(&estate);

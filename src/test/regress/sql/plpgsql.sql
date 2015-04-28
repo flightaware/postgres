@@ -1624,14 +1624,13 @@ begin
 end$$ language plpgsql;
 
 \set VERBOSITY verbose
-create function f2(r record, OUT typ regtype, OUT rec record) as $$
+create function f2(r record) returns regtype as $$
 begin
---  typ := pg_typeof(r);
-
-  rec := r;
+  raise notice 'r = %', r;
+  return pg_typeof(r);
 end$$ language plpgsql;
 
-select *, f2(row(f1.*)), f2(NULL::pg_class) from f1(42);
+select *, f2(row(f1.*)), f2((SELECT row(d.*) FROM pg_shdescription d LIMIT 1)) from f1(42);
 \set VERBOSITY default
 
 drop function f1(int);
