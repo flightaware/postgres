@@ -2,6 +2,7 @@ language: c
 compiler:
 - clang
 - gcc
+
 env:
     global:
         - CONFIG='--enable-debug --enable-cassert'
