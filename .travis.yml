@@ -50,3 +50,6 @@ script:
     - ./configure $CONFIG $TAP --with-blocksize=$BLKSZ --with-wal-blocksize=$WALBLK
     - make -j2
     - make check-world
+    - echo $TRAVIS_BUILD_DIR
+    - [ -e $TRAVIS_BUILD_DIR/src/test/regress/regression.out ] && cat $TRAVIS_BUILD_DIR/src/test/regress/regression.out
+    - [ -e $TRAVIS_BUILD_DIR/src/test/regress/regression.diffs ] && cat $TRAVIS_BUILD_DIR/src/test/regress/regression.diffs
