@@ -2,3 +2,7 @@ language: c
 compiler:
 - clang
 - gcc
+script:
+    - configure
+    - make -j2
+    - make check-world
