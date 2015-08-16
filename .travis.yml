@@ -52,5 +52,7 @@ script:
     - make -j2
     - make check-world
     - echo $TRAVIS_BUILD_DIR
+    - test -e $TRAVIS_BUILD_DIR && echo true
+    - test -e $TRAVIS_BUILD_DIR/src/test/regress && echo true
     - test -e $TRAVIS_BUILD_DIR/src/test/regress/regression.out && cat $TRAVIS_BUILD_DIR/src/test/regress/regression.out
     - test -e $TRAVIS_BUILD_DIR/src/test/regress/regression.diffs && cat $TRAVIS_BUILD_DIR/src/test/regress/regression.diffs
