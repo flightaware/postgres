@@ -7,48 +7,12 @@ env:
     global:
         - CONFIG='--enable-debug --enable-cassert'
     matrix:
-        - TAP=''                        BLKSZ=4      WALBLK=4
-        - TAP=''                        BLKSZ=4      WALBLK=8
-        - TAP=''                        BLKSZ=4      WALBLK=16
-        - TAP=''                        BLKSZ=4      WALBLK=32
-
-        - TAP=''                        BLKSZ=8      WALBLK=4
-        - TAP=''                        BLKSZ=8      WALBLK=8
-        - TAP=''                        BLKSZ=8      WALBLK=16
-        - TAP=''                        BLKSZ=8      WALBLK=32
-
-        - TAP=''                        BLKSZ=16     WALBLK=4
-        - TAP=''                        BLKSZ=16     WALBLK=8
-        - TAP=''                        BLKSZ=16     WALBLK=16
-        - TAP=''                        BLKSZ=16     WALBLK=32
-
-        - TAP=''                        BLKSZ=32     WALBLK=4
-        - TAP=''                        BLKSZ=32     WALBLK=8
-        - TAP=''                        BLKSZ=32     WALBLK=16
         - TAP=''                        BLKSZ=32     WALBLK=32
 
         - TAP='--enable-tap-tests'      BLKSZ=4      WALBLK=4
-        - TAP='--enable-tap-tests'      BLKSZ=4      WALBLK=8
-        - TAP='--enable-tap-tests'      BLKSZ=4      WALBLK=16
-        - TAP='--enable-tap-tests'      BLKSZ=4      WALBLK=32
-
-        - TAP='--enable-tap-tests'      BLKSZ=8      WALBLK=4
-        - TAP='--enable-tap-tests'      BLKSZ=8      WALBLK=8
-        - TAP='--enable-tap-tests'      BLKSZ=8      WALBLK=16
-        - TAP='--enable-tap-tests'      BLKSZ=8      WALBLK=32
-
-        - TAP='--enable-tap-tests'      BLKSZ=16     WALBLK=4
-        - TAP='--enable-tap-tests'      BLKSZ=16     WALBLK=8
-        - TAP='--enable-tap-tests'      BLKSZ=16     WALBLK=16
-        - TAP='--enable-tap-tests'      BLKSZ=16     WALBLK=32
-
-        - TAP='--enable-tap-tests'      BLKSZ=32     WALBLK=4
-        - TAP='--enable-tap-tests'      BLKSZ=32     WALBLK=8
-        - TAP='--enable-tap-tests'      BLKSZ=32     WALBLK=16
-        - TAP='--enable-tap-tests'      BLKSZ=32     WALBLK=32
 
 script:
-    - ./configure $CONFIG $TAP --with-blocksize=$BLKSZ --with-wal-blocksize=$WALBLK
+    - ./configure $CONFIG $TAP
     - make -j2
     - make check-world
     - test ! -e $TRAVIS_BUILD_DIR/src/test/regress/regression.out || cat $TRAVIS_BUILD_DIR/src/test/regress/regression.out
