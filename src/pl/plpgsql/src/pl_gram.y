@@ -500,34 +500,16 @@ decl_statement	: decl_varname decl_const decl_datatype decl_collate decl_notnull
 													 $3, true);
 						if ($2)
 						{
-							if (var->dtype == PLPGSQL_DTYPE_VAR)
 								((PLpgSQL_var *) var)->isconst = $2;
-							else
-								ereport(ERROR,
-										(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-										 errmsg("row or record variable cannot be CONSTANT"),
-										 parser_errposition(@2)));
 						}
 						if ($5)
 						{
-							if (var->dtype == PLPGSQL_DTYPE_VAR)
 								((PLpgSQL_var *) var)->notnull = $5;
-							else
-								ereport(ERROR,
-										(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-										 errmsg("row or record variable cannot be NOT NULL"),
-										 parser_errposition(@4)));
 
 						}
 						if ($6 != NULL)
 						{
-							if (var->dtype == PLPGSQL_DTYPE_VAR)
 								((PLpgSQL_var *) var)->default_val = $6;
-							else
-								ereport(ERROR,
-										(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-										 errmsg("default value for row or record variable is not supported"),
-										 parser_errposition(@5)));
 						}
 					}
 				| decl_varname K_ALIAS K_FOR decl_aliasitem ';'

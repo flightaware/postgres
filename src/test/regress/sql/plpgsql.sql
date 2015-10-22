@@ -4375,3 +4375,16 @@ exception when others then
   null; -- do nothing
 end;
 $$;
+
+
+--
+-- Test CONSTANT, NOT NULL and default for row variables
+--
+
+do $$
+declare
+  c CONSTANT pg_class := oid,* FROM pg_catalog.pg_class WHERE oid = 'pg_catalog.pg_class'::regclass;
+begin
+  raise notice 'c.oid = %', c.oid;
+end
+$$;
