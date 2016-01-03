@@ -4,7 +4,7 @@
  *	  prototypes for pathnode.c, relnode.c.
  *
  *
- * Portions Copyright (c) 1996-2015, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2016, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  * src/include/optimizer/pathnode.h
@@ -148,7 +148,10 @@ extern RelOptInfo *build_join_rel(PlannerInfo *root,
 			   RelOptInfo *inner_rel,
 			   SpecialJoinInfo *sjinfo,
 			   List **restrictlist_ptr);
-extern Relids min_join_parameterization(PlannerInfo *root, Relids joinrelids);
+extern Relids min_join_parameterization(PlannerInfo *root,
+						  Relids joinrelids,
+						  RelOptInfo *outer_rel,
+						  RelOptInfo *inner_rel);
 extern RelOptInfo *build_empty_join_rel(PlannerInfo *root);
 extern AppendRelInfo *find_childrel_appendrelinfo(PlannerInfo *root,
 							RelOptInfo *rel);
