@@ -14,7 +14,9 @@ SELECT regprocedure('abs(numeric)');
 SELECT regclass('pg_class');
 SELECT regtype('int4');
 SELECT regrole('regtestrole');
+SELECT regrole('"regtestrole"');
 SELECT regnamespace('pg_catalog');
+SELECT regnamespace('"pg_catalog"');
 
 SELECT to_regoper('||/');
 SELECT to_regoperator('+(int4,int4)');
@@ -23,7 +25,9 @@ SELECT to_regprocedure('abs(numeric)');
 SELECT to_regclass('pg_class');
 SELECT to_regtype('int4');
 SELECT to_regrole('regtestrole');
+SELECT to_regrole('"regtestrole"');
 SELECT to_regnamespace('pg_catalog');
+SELECT to_regnamespace('"pg_catalog"');
 
 -- with schemaname
 
@@ -53,7 +57,11 @@ SELECT regprocedure('absinthe(numeric)');
 SELECT regclass('pg_classes');
 SELECT regtype('int3');
 SELECT regrole('regtestrole');
+SELECT regrole('"regtestrole"');
+SELECT regrole('" with "" "');
 SELECT regnamespace('nonexistent');
+SELECT regnamespace('"nonexistent"');
+SELECT regnamespace('" with "" "');
 
 -- with schemaname
 
@@ -75,7 +83,11 @@ SELECT to_regprocedure('absinthe(numeric)');
 SELECT to_regclass('pg_classes');
 SELECT to_regtype('int3');
 SELECT to_regrole('regtestrole');
+SELECT to_regrole('"regtestrole"');
+SELECT to_regrole('" with "" "');
 SELECT to_regnamespace('nonexistent');
+SELECT to_regnamespace('"nonexistent"');
+SELECT to_regnamespace('" with "" "');
 
 -- with schemaname
 

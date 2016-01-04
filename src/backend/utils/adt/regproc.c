@@ -1569,6 +1569,7 @@ Datum
 regrolein(PG_FUNCTION_ARGS)
 {
 	char	   *role_name_or_oid = PG_GETARG_CSTRING(0);
+	List	   *names;
 	Oid			result;
 
 	/* '-' ? */
@@ -1586,7 +1587,15 @@ regrolein(PG_FUNCTION_ARGS)
 	}
 
 	/* Normal case: see if the name matches any pg_authid entry. */
-	result = get_role_oid(role_name_or_oid, false);
+	names = stringToQualifiedNameList(role_name_or_oid);
+
+	if (list_length(names) > 1)
+		ereport(ERROR,
+				(errcode(ERRCODE_SYNTAX_ERROR),
+			errmsg("improper qualified name (too many dotted names): %s",
+				   NameListToString(names))));
+
+	result = get_role_oid(strVal(linitial(names)), false);
 
 	PG_RETURN_OID(result);
 }
@@ -1600,9 +1609,18 @@ Datum
 to_regrole(PG_FUNCTION_ARGS)
 {
 	char	   *role_name = PG_GETARG_CSTRING(0);
+	List	   *names;
 	Oid			result;
 
-	result = get_role_oid(role_name, true);
+	names = stringToQualifiedNameList(role_name);
+
+	if (list_length(names) > 1)
+		ereport(ERROR,
+				(errcode(ERRCODE_SYNTAX_ERROR),
+			errmsg("improper qualified name (too many dotted names): %s",
+				   NameListToString(names))));
+
+	result = get_role_oid(strVal(linitial(names)), true);
 
 	if (OidIsValid(result))
 		PG_RETURN_OID(result);
@@ -1668,6 +1686,7 @@ Datum
 regnamespacein(PG_FUNCTION_ARGS)
 {
 	char	   *nsp_name_or_oid = PG_GETARG_CSTRING(0);
+	List	   *names;
 	Oid			result = InvalidOid;
 
 	/* '-' ? */
@@ -1685,7 +1704,15 @@ regnamespacein(PG_FUNCTION_ARGS)
 	}
 
 	/* Normal case: see if the name matches any pg_namespace entry. */
-	result = get_namespace_oid(nsp_name_or_oid, false);
+	names = stringToQualifiedNameList(nsp_name_or_oid);
+
+	if (list_length(names) != 1)
+		ereport(ERROR,
+				(errcode(ERRCODE_SYNTAX_ERROR),
+			errmsg("improper qualified name (too many dotted names): %s",
+				   NameListToString(names))));
+
+	result = get_namespace_oid(strVal(linitial(names)), false);
 
 	PG_RETURN_OID(result);
 }
@@ -1699,9 +1726,18 @@ Datum
 to_regnamespace(PG_FUNCTION_ARGS)
 {
 	char	   *nsp_name = PG_GETARG_CSTRING(0);
+	List	   *names;
 	Oid			result;
 
-	result = get_namespace_oid(nsp_name, true);
+	names = stringToQualifiedNameList(nsp_name);
+
+	if (list_length(names) != 1)
+		ereport(ERROR,
+				(errcode(ERRCODE_SYNTAX_ERROR),
+			errmsg("improper qualified name (too many dotted names): %s",
+				   NameListToString(names))));
+
+	result = get_namespace_oid(strVal(linitial(names)), true);
 
 	if (OidIsValid(result))
 		PG_RETURN_OID(result);
