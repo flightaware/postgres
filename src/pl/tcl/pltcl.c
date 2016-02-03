@@ -1734,6 +1734,7 @@ pltcl_quote(ClientData cdata, Tcl_Interp *interp,
 	char	   *tmp;
 	const char *cp1;
 	char	   *cp2;
+	int		    length;
 
 	/************************************************************
 	 * Check call syntax
@@ -1748,8 +1749,8 @@ pltcl_quote(ClientData cdata, Tcl_Interp *interp,
 	 * Allocate space for the maximum the string can
 	 * grow to and initialize pointers
 	 ************************************************************/
-	tmp = palloc(strlen(Tcl_GetString(objv[1])) * 2 + 1);
-	cp1 = Tcl_GetString(objv[1]);
+	cp1 = Tcl_GetStringFromObj (objv[1], &length);
+	tmp = palloc(length * 2 + 1);
 	cp2 = tmp;
 
 	/************************************************************
@@ -2323,8 +2324,8 @@ pltcl_SPI_execute_plan(ClientData cdata, Tcl_Interp *interp,
 	CONST84 char *arrayname = NULL;
  	Tcl_Obj    *loop_body = NULL;
 	int			count = 0;
-	int			callnargs;
-	CONST84 char **callargs = NULL;
+	int			callObjc;
+	Tcl_Obj   **callObjv = NULL;
 	Datum	   *argvalues;
 	MemoryContext oldcontext = CurrentMemoryContext;
 	ResourceOwner oldowner = CurrentResourceOwner;
@@ -2420,6 +2421,7 @@ pltcl_SPI_execute_plan(ClientData cdata, Tcl_Interp *interp,
 	 ************************************************************/
 	if (qdesc->nargs > 0)
 	{
+
 		if (i >= objc)
 		{
 			Tcl_SetResult(interp, "missing argument list", TCL_STATIC);
@@ -2429,23 +2431,22 @@ pltcl_SPI_execute_plan(ClientData cdata, Tcl_Interp *interp,
 		/************************************************************
 		 * Split the argument values
 		 ************************************************************/
-		if (Tcl_SplitList(interp, Tcl_GetString(objv[i++]), &callnargs, &callargs) != TCL_OK)
+		if (Tcl_ListObjGetElements(interp, objv[i++], &callObjc, &callObjv) != TCL_OK)
 			return TCL_ERROR;
 
 		/************************************************************
 		 * Check that the number of arguments matches
 		 ************************************************************/
-		if (callnargs != qdesc->nargs)
+		if (callObjc != qdesc->nargs)
 		{
 			Tcl_SetResult(interp,
 						  "argument list length doesn't match number of arguments for query",
 						  TCL_STATIC);
-			ckfree((char *) callargs);
 			return TCL_ERROR;
 		}
 	}
 	else
-		callnargs = 0;
+		callObjc = 0;
 
 	/************************************************************
 	 * Get loop body if present
@@ -2456,8 +2457,6 @@ pltcl_SPI_execute_plan(ClientData cdata, Tcl_Interp *interp,
 	if (i != objc)
 	{
 		Tcl_SetResult(interp, usage, TCL_STATIC);
-		if (callargs)
-			ckfree((char *) callargs);
 		return TCL_ERROR;
 	}
 
@@ -2474,9 +2473,9 @@ pltcl_SPI_execute_plan(ClientData cdata, Tcl_Interp *interp,
 		 * Setup the value array for SPI_execute_plan() using
 		 * the type specific input functions
 		 ************************************************************/
-		argvalues = (Datum *) palloc(callnargs * sizeof(Datum));
+		argvalues = (Datum *) palloc(callObjc * sizeof(Datum));
 
-		for (j = 0; j < callnargs; j++)
+		for (j = 0; j < callObjc; j++)
 		{
 			if (nulls && nulls[j] == 'n')
 			{
@@ -2489,7 +2488,7 @@ pltcl_SPI_execute_plan(ClientData cdata, Tcl_Interp *interp,
 			{
 				UTF_BEGIN;
 				argvalues[j] = InputFunctionCall(&qdesc->arginfuncs[j],
-											   (char *) UTF_U2E(callargs[j]),
+											   (char *) UTF_U2E(Tcl_GetString(callObjv[j])),
 												 qdesc->argtypioparams[j],
 												 -1);
 				UTF_END;
@@ -2514,16 +2513,9 @@ pltcl_SPI_execute_plan(ClientData cdata, Tcl_Interp *interp,
 	PG_CATCH();
 	{
 		pltcl_subtrans_abort(interp, oldcontext, oldowner);
-
-		if (callargs)
-			ckfree((char *) callargs);
-
 		return TCL_ERROR;
 	}
 	PG_END_TRY();
-
-	if (callargs)
-		ckfree((char *) callargs);
 
 	return my_rc;
 }
