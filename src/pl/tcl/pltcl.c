@@ -1734,7 +1734,7 @@ pltcl_quote(ClientData cdata, Tcl_Interp *interp,
 	char	   *tmp;
 	const char *cp1;
 	char	   *cp2;
-	int		    length;
+	int			length;
 
 	/************************************************************
 	 * Check call syntax
