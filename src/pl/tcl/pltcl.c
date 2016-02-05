@@ -578,7 +578,9 @@ pltcl_init_load_unknown(Tcl_Interp *interp)
 			pfree(part);
 		}
 	}
-	tcl_rc = Tcl_GlobalEval(interp, Tcl_DStringValue(&unknown_src));
+	tcl_rc = Tcl_EvalEx(interp, Tcl_DStringValue(&unknown_src),
+						Tcl_DStringLength(&unknown_src),
+						TCL_EVAL_GLOBAL);
 
 	Tcl_DStringFree(&unknown_src);
 	SPI_freetuptable(SPI_tuptable);
@@ -1203,7 +1205,9 @@ pltcl_event_trigger_handler(PG_FUNCTION_ARGS, bool pltrusted)
 	Tcl_DStringAppendElement(&tcl_cmd, tdata->event);
 	Tcl_DStringAppendElement(&tcl_cmd, tdata->tag);
 
-	tcl_rc = Tcl_GlobalEval(interp, Tcl_DStringValue(&tcl_cmd));
+	tcl_rc = Tcl_EvalEx(interp, Tcl_DStringValue(&tcl_cmd),
+						Tcl_DStringLength(&tcl_cmd),
+						TCL_EVAL_GLOBAL);
 	Tcl_DStringFree(&tcl_cmd);
 
 	/* Check for errors reported by Tcl. */
@@ -1574,8 +1578,10 @@ compile_pltcl_function(Oid fn_oid, Oid tgreloid,
 		/************************************************************
 		 * Create the procedure in the interpreter
 		 ************************************************************/
-		tcl_rc = Tcl_GlobalEval(interp,
-								Tcl_DStringValue(&proc_internal_def));
+		tcl_rc = Tcl_EvalEx(interp,
+							Tcl_DStringValue(&proc_internal_def),
+							Tcl_DStringLength(&proc_internal_def),
+							TCL_EVAL_GLOBAL);
 		Tcl_DStringFree(&proc_internal_def);
 		if (tcl_rc != TCL_OK)
 		{
