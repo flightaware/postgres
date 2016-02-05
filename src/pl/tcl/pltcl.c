@@ -1998,7 +1998,7 @@ pltcl_SPI_execute(ClientData cdata, Tcl_Interp *interp,
 		if (Tcl_GetIndexFromObj(interp, objv[i], options, "option",
 								TCL_EXACT, &optIndex) != TCL_OK)
 		{
-			return TCL_ERROR;
+			break;
 		}
 
 		if (++i >= objc)
@@ -2264,7 +2264,7 @@ pltcl_SPI_prepare(ClientData cdata, Tcl_Interp *interp,
 		 * Prepare the plan and check for errors
 		 ************************************************************/
 		UTF_BEGIN;
- 		qdesc->plan = SPI_prepare(UTF_U2E(Tcl_GetString(argsObj[1])), nargs, qdesc->argtypes);
+		qdesc->plan = SPI_prepare(UTF_U2E(Tcl_GetString(objv[1])), nargs, qdesc->argtypes);
 		UTF_END;
 
 		if (qdesc->plan == NULL)
@@ -2353,13 +2353,13 @@ pltcl_SPI_execute_plan(ClientData cdata, Tcl_Interp *interp,
 		if (Tcl_GetIndexFromObj(interp, objv[i], options, "option",
 								TCL_EXACT, &optIndex) != TCL_OK)
 		{
-			return TCL_ERROR;
+			break;
 		}
 
 		if (++i >= objc)
 		{
 			Tcl_SetObjResult(interp,
-			   Tcl_NewStringObj("missing argument to -count or -array", -1));
+			   Tcl_NewStringObj("missing argument to -array, -count or -nulls", -1));
 			return TCL_ERROR;
 		}
 
