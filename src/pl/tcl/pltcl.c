@@ -238,7 +238,7 @@ static int pltcl_SPI_lastoid(ClientData cdata, Tcl_Interp *interp,
 static void pltcl_set_tuple_values(Tcl_Interp *interp, CONST84 char *arrayname,
 					   int tupno, HeapTuple tuple, TupleDesc tupdesc);
 static void pltcl_build_tuple_argument(HeapTuple tuple, TupleDesc tupdesc,
-						   Tcl_Obj *retobj);
+						   Tcl_Obj * retobj);
 
 
 /*
@@ -707,8 +707,8 @@ pltcl_func_handler(PG_FUNCTION_ARGS, bool pltrusted)
 	 * proc in the Tcl interpreter
 	 ************************************************************/
 	tcl_cmd = Tcl_NewObj();
-	Tcl_ListObjAppendElement (NULL, tcl_cmd,
-	    Tcl_NewStringObj(prodesc->internal_proname, -1));
+	Tcl_ListObjAppendElement(NULL, tcl_cmd,
+							 Tcl_NewStringObj(prodesc->internal_proname, -1));
 
 	/************************************************************
 	 * Add all call arguments to the command
@@ -723,7 +723,7 @@ pltcl_func_handler(PG_FUNCTION_ARGS, bool pltrusted)
 				 * For tuple values, add a list for 'array set ...'
 				 **************************************************/
 				if (fcinfo->argnull[i])
-				    Tcl_ListObjAppendElement(NULL, tcl_cmd, Tcl_NewObj());
+					Tcl_ListObjAppendElement(NULL, tcl_cmd, Tcl_NewObj());
 				else
 				{
 					HeapTupleHeader td;
@@ -756,7 +756,7 @@ pltcl_func_handler(PG_FUNCTION_ARGS, bool pltrusted)
 				 * of their external representation
 				 **************************************************/
 				if (fcinfo->argnull[i])
-				    Tcl_ListObjAppendElement(NULL, tcl_cmd, Tcl_NewObj());
+					Tcl_ListObjAppendElement(NULL, tcl_cmd, Tcl_NewObj());
 				else
 				{
 					char	   *tmp;
@@ -765,7 +765,7 @@ pltcl_func_handler(PG_FUNCTION_ARGS, bool pltrusted)
 											 fcinfo->arg[i]);
 					UTF_BEGIN;
 					Tcl_ListObjAppendElement(NULL, tcl_cmd,
-					    Tcl_NewStringObj(UTF_E2U(tmp), -1));
+										 Tcl_NewStringObj(UTF_E2U(tmp), -1));
 					UTF_END;
 					pfree(tmp);
 				}
@@ -785,7 +785,7 @@ pltcl_func_handler(PG_FUNCTION_ARGS, bool pltrusted)
 	 * We assume no PG error can be thrown directly from this call.
 	 ************************************************************/
 	Tcl_IncrRefCount(tcl_cmd);
-	tcl_rc = Tcl_EvalObjEx(interp, tcl_cmd, (TCL_EVAL_DIRECT|TCL_EVAL_GLOBAL));
+	tcl_rc = Tcl_EvalObjEx(interp, tcl_cmd, (TCL_EVAL_DIRECT | TCL_EVAL_GLOBAL));
 	Tcl_DecrRefCount(tcl_cmd);
 
 	/************************************************************
@@ -876,30 +876,30 @@ pltcl_trigger_handler(PG_FUNCTION_ARGS, bool pltrusted)
 	{
 		/* The procedure name */
 		Tcl_ListObjAppendElement(NULL, tcl_cmd,
-			Tcl_NewStringObj(prodesc->internal_proname, -1));
+							Tcl_NewStringObj(prodesc->internal_proname, -1));
 
 		/* The trigger name for argument TG_name */
 		Tcl_ListObjAppendElement(NULL, tcl_cmd,
-			Tcl_NewStringObj(trigdata->tg_trigger->tgname, -1));
+						 Tcl_NewStringObj(trigdata->tg_trigger->tgname, -1));
 
 		/* The oid of the trigger relation for argument TG_relid */
 		/* NB don't convert to a string for more performance */
 		stroid = DatumGetCString(DirectFunctionCall1(oidout,
 							ObjectIdGetDatum(trigdata->tg_relation->rd_id)));
 		Tcl_ListObjAppendElement(NULL, tcl_cmd,
-		    Tcl_NewStringObj(stroid, -1));
+								 Tcl_NewStringObj(stroid, -1));
 		pfree(stroid);
 
 		/* The name of the table the trigger is acting on: TG_table_name */
 		stroid = SPI_getrelname(trigdata->tg_relation);
 		Tcl_ListObjAppendElement(NULL, tcl_cmd,
-			Tcl_NewStringObj(stroid, -1));
+								 Tcl_NewStringObj(stroid, -1));
 		pfree(stroid);
 
 		/* The schema of the table the trigger is acting on: TG_table_schema */
 		stroid = SPI_getnspname(trigdata->tg_relation);
 		Tcl_ListObjAppendElement(NULL, tcl_cmd,
-			Tcl_NewStringObj(stroid, -1));
+								 Tcl_NewStringObj(stroid, -1));
 		pfree(stroid);
 
 		/* A list of attribute names for argument TG_relatts */
@@ -907,33 +907,33 @@ pltcl_trigger_handler(PG_FUNCTION_ARGS, bool pltrusted)
 		for (i = 0; i < tupdesc->natts; i++)
 		{
 			if (tupdesc->attrs[i]->attisdropped)
-			    Tcl_ListObjAppendElement(NULL, tcl_trigtup, Tcl_NewObj());
+				Tcl_ListObjAppendElement(NULL, tcl_trigtup, Tcl_NewObj());
 			else
-			    Tcl_ListObjAppendElement(NULL, tcl_trigtup,
-					Tcl_NewStringObj(NameStr(tupdesc->attrs[i]->attname), -1));
+				Tcl_ListObjAppendElement(NULL, tcl_trigtup,
+				  Tcl_NewStringObj(NameStr(tupdesc->attrs[i]->attname), -1));
 		}
 		Tcl_ListObjAppendElement(NULL, tcl_cmd, tcl_trigtup);
-		// Tcl_DecrRefCount(tcl_trigtup);
-		tcl_trigtup = Tcl_NewObj ();
+		/* Tcl_DecrRefCount(tcl_trigtup); */
+		tcl_trigtup = Tcl_NewObj();
 
 		/* The when part of the event for TG_when */
 		if (TRIGGER_FIRED_BEFORE(trigdata->tg_event))
-		    Tcl_ListObjAppendElement(NULL, tcl_cmd, 
-			    Tcl_NewStringObj("BEFORE",-1));
+			Tcl_ListObjAppendElement(NULL, tcl_cmd,
+									 Tcl_NewStringObj("BEFORE", -1));
 		else if (TRIGGER_FIRED_AFTER(trigdata->tg_event))
-		    Tcl_ListObjAppendElement(NULL, tcl_cmd, 
-			    Tcl_NewStringObj("AFTER",-1));
+			Tcl_ListObjAppendElement(NULL, tcl_cmd,
+									 Tcl_NewStringObj("AFTER", -1));
 		else if (TRIGGER_FIRED_INSTEAD(trigdata->tg_event))
-		    Tcl_ListObjAppendElement(NULL, tcl_cmd, 
-			    Tcl_NewStringObj("INSTEAD OF",-1));
+			Tcl_ListObjAppendElement(NULL, tcl_cmd,
+									 Tcl_NewStringObj("INSTEAD OF", -1));
 		else
 			elog(ERROR, "unrecognized WHEN tg_event: %u", trigdata->tg_event);
 
 		/* The level part of the event for TG_level */
 		if (TRIGGER_FIRED_FOR_ROW(trigdata->tg_event))
 		{
-		    Tcl_ListObjAppendElement(NULL, tcl_cmd,
-				Tcl_NewStringObj("ROW",-1));
+			Tcl_ListObjAppendElement(NULL, tcl_cmd,
+									 Tcl_NewStringObj("ROW", -1));
 
 			/* Build the data list for the trigtuple */
 			pltcl_build_tuple_argument(trigdata->tg_trigtuple,
@@ -946,7 +946,7 @@ pltcl_trigger_handler(PG_FUNCTION_ARGS, bool pltrusted)
 			if (TRIGGER_FIRED_BY_INSERT(trigdata->tg_event))
 			{
 				Tcl_ListObjAppendElement(NULL, tcl_cmd,
-				    Tcl_NewStringObj("INSERT",-1));
+										 Tcl_NewStringObj("INSERT", -1));
 
 				Tcl_ListObjAppendElement(NULL, tcl_cmd, tcl_trigtup);
 				Tcl_ListObjAppendElement(NULL, tcl_cmd, Tcl_NewObj());
@@ -956,7 +956,7 @@ pltcl_trigger_handler(PG_FUNCTION_ARGS, bool pltrusted)
 			else if (TRIGGER_FIRED_BY_DELETE(trigdata->tg_event))
 			{
 				Tcl_ListObjAppendElement(NULL, tcl_cmd,
-				    Tcl_NewStringObj("DELETE",-1));
+										 Tcl_NewStringObj("DELETE", -1));
 
 				Tcl_ListObjAppendElement(NULL, tcl_cmd, Tcl_NewObj());
 				Tcl_ListObjAppendElement(NULL, tcl_cmd, tcl_trigtup);
@@ -966,7 +966,7 @@ pltcl_trigger_handler(PG_FUNCTION_ARGS, bool pltrusted)
 			else if (TRIGGER_FIRED_BY_UPDATE(trigdata->tg_event))
 			{
 				Tcl_ListObjAppendElement(NULL, tcl_cmd,
-				    Tcl_NewStringObj("UPDATE",-1));
+										 Tcl_NewStringObj("UPDATE", -1));
 
 				pltcl_build_tuple_argument(trigdata->tg_newtuple,
 										   tupdesc, tcl_newtup);
@@ -982,20 +982,20 @@ pltcl_trigger_handler(PG_FUNCTION_ARGS, bool pltrusted)
 		else if (TRIGGER_FIRED_FOR_STATEMENT(trigdata->tg_event))
 		{
 			Tcl_ListObjAppendElement(NULL, tcl_cmd,
-				Tcl_NewStringObj("STATEMENT",-1));
+									 Tcl_NewStringObj("STATEMENT", -1));
 
 			if (TRIGGER_FIRED_BY_INSERT(trigdata->tg_event))
 				Tcl_ListObjAppendElement(NULL, tcl_cmd,
-				    Tcl_NewStringObj("INSERT", -1));
+										 Tcl_NewStringObj("INSERT", -1));
 			else if (TRIGGER_FIRED_BY_DELETE(trigdata->tg_event))
 				Tcl_ListObjAppendElement(NULL, tcl_cmd,
-				    Tcl_NewStringObj("DELETE", -1));
+										 Tcl_NewStringObj("DELETE", -1));
 			else if (TRIGGER_FIRED_BY_UPDATE(trigdata->tg_event))
 				Tcl_ListObjAppendElement(NULL, tcl_cmd,
-				    Tcl_NewStringObj("UPDATE", -1));
+										 Tcl_NewStringObj("UPDATE", -1));
 			else if (TRIGGER_FIRED_BY_TRUNCATE(trigdata->tg_event))
 				Tcl_ListObjAppendElement(NULL, tcl_cmd,
-				    Tcl_NewStringObj("TRUNCATE", -1));
+										 Tcl_NewStringObj("TRUNCATE", -1));
 			else
 				elog(ERROR, "unrecognized OP tg_event: %u", trigdata->tg_event);
 
@@ -1009,13 +1009,13 @@ pltcl_trigger_handler(PG_FUNCTION_ARGS, bool pltrusted)
 
 		/* Finally append the arguments from CREATE TRIGGER */
 		for (i = 0; i < trigdata->tg_trigger->tgnargs; i++)
-		    Tcl_ListObjAppendElement (NULL, tcl_cmd,
-			    Tcl_NewStringObj (trigdata->tg_trigger->tgargs[i], -1));
+			Tcl_ListObjAppendElement(NULL, tcl_cmd,
+					  Tcl_NewStringObj(trigdata->tg_trigger->tgargs[i], -1));
 
 	}
 	PG_CATCH();
 	{
-	    Tcl_DecrRefCount(tcl_cmd);
+		Tcl_DecrRefCount(tcl_cmd);
 		Tcl_DecrRefCount(tcl_trigtup);
 		Tcl_DecrRefCount(tcl_newtup);
 		PG_RE_THROW();
@@ -1028,9 +1028,9 @@ pltcl_trigger_handler(PG_FUNCTION_ARGS, bool pltrusted)
 	 * We assume no PG error can be thrown directly from this call.
 	 ************************************************************/
 	Tcl_IncrRefCount(tcl_cmd);
-	tcl_rc = Tcl_EvalObjEx(interp, tcl_cmd, (TCL_EVAL_DIRECT|TCL_EVAL_GLOBAL));
-	// Tcl_DecrRefCount(tcl_trigtup);
-	// Tcl_DecrRefCount(tcl_newtup);
+	tcl_rc = Tcl_EvalObjEx(interp, tcl_cmd, (TCL_EVAL_DIRECT | TCL_EVAL_GLOBAL));
+	/* Tcl_DecrRefCount(tcl_trigtup); */
+	/* Tcl_DecrRefCount(tcl_newtup); */
 	Tcl_DecrRefCount(tcl_cmd);
 
 	/************************************************************
@@ -1734,7 +1734,7 @@ pltcl_quote(ClientData cdata, Tcl_Interp *interp,
 	char	   *tmp;
 	const char *cp1;
 	char	   *cp2;
-	int		    length;
+	int			length;
 
 	/************************************************************
 	 * Check call syntax
@@ -1749,7 +1749,7 @@ pltcl_quote(ClientData cdata, Tcl_Interp *interp,
 	 * Allocate space for the maximum the string can
 	 * grow to and initialize pointers
 	 ************************************************************/
-	cp1 = Tcl_GetStringFromObj (objv[1], &length);
+	cp1 = Tcl_GetStringFromObj(objv[1], &length);
 	tmp = palloc(length * 2 + 1);
 	cp2 = tmp;
 
@@ -2185,7 +2185,7 @@ pltcl_SPI_prepare(ClientData cdata, Tcl_Interp *interp,
 {
 	volatile MemoryContext plan_cxt = NULL;
 	int			nargs;
- 	Tcl_Obj   **argsObj;
+	Tcl_Obj   **argsObj;
 	pltcl_query_desc *qdesc;
 	int			i;
 	Tcl_HashEntry *hashent;
@@ -2251,7 +2251,7 @@ pltcl_SPI_prepare(ClientData cdata, Tcl_Interp *interp,
 						typIOParam;
 			int32		typmod;
 
- 			parseTypeString(Tcl_GetString(argsObj[i]), &typId, &typmod, false);
+			parseTypeString(Tcl_GetString(argsObj[i]), &typId, &typmod, false);
 
 			getTypeInputInfo(typId, &typInput, &typIOParam);
 
@@ -2311,18 +2311,18 @@ pltcl_SPI_prepare(ClientData cdata, Tcl_Interp *interp,
  **********************************************************************/
 static int
 pltcl_SPI_execute_plan(ClientData cdata, Tcl_Interp *interp,
- 					   int objc, Tcl_Obj * const objv[])
+					   int objc, Tcl_Obj * const objv[])
 {
 	int			my_rc;
 	int			spi_rc;
 	int			i;
 	int			j;
- 	int			optIndex;
+	int			optIndex;
 	Tcl_HashEntry *hashent;
 	pltcl_query_desc *qdesc;
 	const char *nulls = NULL;
 	CONST84 char *arrayname = NULL;
- 	Tcl_Obj    *loop_body = NULL;
+	Tcl_Obj    *loop_body = NULL;
 	int			count = 0;
 	int			callObjc;
 	Tcl_Obj   **callObjv = NULL;
@@ -2359,7 +2359,7 @@ pltcl_SPI_execute_plan(ClientData cdata, Tcl_Interp *interp,
 		if (++i >= objc)
 		{
 			Tcl_SetObjResult(interp,
-			   Tcl_NewStringObj("missing argument to -array, -count or -nulls", -1));
+							 Tcl_NewStringObj("missing argument to -array, -count or -nulls", -1));
 			return TCL_ERROR;
 		}
 
@@ -2488,7 +2488,7 @@ pltcl_SPI_execute_plan(ClientData cdata, Tcl_Interp *interp,
 			{
 				UTF_BEGIN;
 				argvalues[j] = InputFunctionCall(&qdesc->arginfuncs[j],
-											   (char *) UTF_U2E(Tcl_GetString(callObjv[j])),
+								(char *) UTF_U2E(Tcl_GetString(callObjv[j])),
 												 qdesc->argtypioparams[j],
 												 -1);
 				UTF_END;
@@ -2629,7 +2629,7 @@ pltcl_set_tuple_values(Tcl_Interp *interp, CONST84 char *arrayname,
  **********************************************************************/
 static void
 pltcl_build_tuple_argument(HeapTuple tuple, TupleDesc tupdesc,
-						   Tcl_Obj *retobj)
+						   Tcl_Obj * retobj)
 {
 	int			i;
 	char	   *outputstr;
@@ -2680,8 +2680,8 @@ pltcl_build_tuple_argument(HeapTuple tuple, TupleDesc tupdesc,
 		if (!isnull && OidIsValid(typoutput))
 		{
 			outputstr = OidOutputFunctionCall(typoutput, attr);
-			Tcl_ListObjAppendElement (NULL, retobj, 
-				Tcl_NewStringObj (attname, -1));
+			Tcl_ListObjAppendElement(NULL, retobj,
+									 Tcl_NewStringObj(attname, -1));
 			UTF_BEGIN;
 			Tcl_ListObjAppendElement(NULL, retobj, Tcl_NewStringObj(UTF_E2U(outputstr), -1));
 			UTF_END;
