@@ -873,7 +873,6 @@ pltcl_func_handler(FunctionCallInfo fcinfo, bool pltrusted)
 	 ************************************************************/
 	Tcl_IncrRefCount(tcl_cmd);
 	tcl_rc = Tcl_EvalObjEx(interp, tcl_cmd, (TCL_EVAL_DIRECT | TCL_EVAL_GLOBAL));
-	Tcl_DecrRefCount(tcl_cmd);
 
 	/************************************************************
 	 * Check for errors reported by Tcl.
@@ -1019,10 +1018,10 @@ pltcl_trigger_handler(FunctionCallInfo fcinfo, bool pltrusted)
 									 pltrusted);
 
 	pltcl_current_prodesc = prodesc;
-
 	interp = prodesc->interp_desc->interp;
-
 	tupdesc = trigdata->tg_relation->rd_att;
+
+	pltcl_reset_state(prodesc, NULL);
 
 	/************************************************************
 	 * Create the tcl command to call the internal
