@@ -173,8 +173,42 @@ $$ LANGUAGE pltcl;
     </para>
 
     <para>
-     There is currently no support for returning a composite-type
-     result value, nor for returning sets.
+     PL/Tcl functions can return a record containing multiple output
+     parameters.  The function's Tcl code should return a list of
+     key-value pairs matching the output parameters.
+
+<programlisting>
+CREATE FUNCTION cube_squared(in int, out squared int, out cubed int) AS $$
+    return [list squared [expr {$1 * $1}] cubed [expr {$1 * $1 * $1}]]
+$$ LANGUAGE 'pltcl';
+</programlisting>
+    </para>
+
+    <para>
+     Sets can be returned as a table type.  The Tcl code should successively
+     call <literal>return_next</literal> with an argument consisting of a Tcl
+     list of key-value pairs.
+
+<programlisting>
+CREATE OR REPLACE FUNCTION cube_squared_rows(int,int) RETURNS TABLE (n int, squared int, cubed int) AS $$
+    for {set i $1} {$i < $2} {incr i} {
+        return_next [list n $i squared [expr {$i * $i}] cubed [expr {$i * $i * $i}]]
+    }
+$$ LANGUAGE 'pltcl';
+</programlisting>
+    </para>
+
+    <para>
+     Any columns that defined in the composite return type but absent from a list of
+     key-value pairs passed to <literal>return_next</> are implicitly null in the
+     corresponding row.
+     PL/Tcl will generate a Tcl error when a column name in the key-value list
+     is not one of the defined columns.
+    </para>
+
+    <para>
+     Similarly, functions can be defined as returning <literal>SETOF</literal>
+     with a user-defined data type.
     </para>
 
     <para>
@@ -197,8 +231,10 @@ $$ LANGUAGE pltcl;
      displayed by a <command>SELECT</> statement).  Conversely, the
      <literal>return</>
      command will accept any string that is acceptable input format for
-     the function's declared return type.  So, within the PL/Tcl function,
-     all values are just text strings.
+     the function's declared return type(s).  Likewise when producing a
+     set using <literal>return_next</>, values are converted to their
+     native database data types.  (A Tcl error is generated whenever this
+     conversion fails.)
     </para>
 
    </sect1>
