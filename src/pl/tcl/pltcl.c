@@ -122,6 +122,7 @@ typedef struct pltcl_proc_desc
 	bool		lanpltrusted;
 	bool		fn_retistuple;	/* true, if function returns tuple */
 	bool		fn_retisset;	/* true, if function returns a set */
+	Oid			result_oid;		/* Oid of result type */
 	pltcl_interp_desc *interp_desc;
 	FmgrInfo	result_in_func;
 	Oid			result_typioparam;
@@ -1574,6 +1575,7 @@ compile_pltcl_function(Oid fn_oid, Oid tgreloid,
 		/* not necessary since MemSet 0 above */
 		prodesc->fn_retistuple = false;
 		prodesc->fn_retisset = false;
+		prodesc->result_oid = VOIDOID;
 		prodesc->tuple_store_cxt = NULL;
 		prodesc->tuple_store_owner = NULL;
 		prodesc->tuple_store = NULL;
@@ -1644,6 +1646,7 @@ compile_pltcl_function(Oid fn_oid, Oid tgreloid,
 			}
 
 			prodesc->fn_retisset = procStruct->proretset;
+			prodesc->result_oid = procStruct->prorettype;
 			prodesc->fn_retistuple = (procStruct->prorettype == RECORDOID ||
 								   typeStruct->typtype == TYPTYPE_COMPOSITE);
 
@@ -2117,9 +2120,16 @@ pltcl_pg_returnnext(Tcl_Interp *interp, int rowObjc, Tcl_Obj ** rowObjv)
 	}
 	else
 	{
-		ereport(ERROR,
-				(errcode(ERRCODE_SYNTAX_ERROR),
-			   errmsg("unprepared for non-retistuple state at this point")));
+		Datum		retval;
+		bool		isNull = false;
+
+		UTF_BEGIN;
+		retval = InputFunctionCall(&prodesc->result_in_func,
+								 UTF_U2E((char *) Tcl_GetString(rowObjv[0])),
+								   prodesc->result_typioparam,
+								   -1);
+		UTF_END;
+		tuplestore_putvalues(prodesc->tuple_store, prodesc->ret_tupdesc, &retval, &isNull);
 	}
 }
 
@@ -2169,10 +2179,10 @@ pltcl_returnnext(ClientData cdata, Tcl_Interp *interp,
 		return TCL_ERROR;
 	}
 
-	if (rowObjc & 1)
+	if ((rowObjc != 1) && (rowObjc & 1))
 	{
 		Tcl_SetObjResult(interp,
-			 Tcl_NewStringObj("list must have even number of elements", -1));
+						 Tcl_NewStringObj("list must have one or an even number of elements", -1));
 		return TCL_ERROR;
 	}
 

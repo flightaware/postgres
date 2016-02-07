@@ -212,6 +212,19 @@ $$ LANGUAGE 'pltcl';
     </para>
 
     <para>
+     PL/Tcl functions can also use return_next to return a set of
+     a scalar data type.
+
+<programlisting>
+CREATE OR REPLACE FUNCTION sequence(int,int) returns setof int as $$
+	for {set i $1} {$i < $2} {incr i} {
+		return_next $i
+	}
+$$ language 'pltcl';
+</programlisting>
+    </para>
+
+    <para>
      <application>PL/Tcl</> does not currently have full support for
      domain types: it treats a domain the same as the underlying scalar
      type.  This means that constraints associated with the domain will
