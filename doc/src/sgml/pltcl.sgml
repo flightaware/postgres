@@ -216,10 +216,10 @@ $$ LANGUAGE 'pltcl';
      a scalar data type.
 
 <programlisting>
-CREATE OR REPLACE FUNCTION sequence(int,int) returns setof int as $$
-	for {set i $1} {$i < $2} {incr i} {
-		return_next $i
-	}
+CREATE OR REPLACE FUNCTION sequence(int,int) RETURNS SETOF int AS $$
+    for {set i $1} {$i < $2} {incr i} {
+        return_next $i
+    }
 $$ language 'pltcl';
 </programlisting>
     </para>
