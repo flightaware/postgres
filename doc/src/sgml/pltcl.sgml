@@ -212,7 +212,7 @@ $$ LANGUAGE 'pltcl';
     </para>
 
     <para>
-     PL/Tcl functions can also use return_next to return a set of
+     PL/Tcl functions can also use <literal>return_next</> to return a set of
      a scalar data type.
 
 <programlisting>
