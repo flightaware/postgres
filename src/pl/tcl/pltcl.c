@@ -1629,6 +1629,11 @@ pltcl_elog(ClientData cdata, Tcl_Interp *interp,
 		"WARNING", "ERROR", "FATAL", (char *) NULL
 	};
 
+	static CONST84 int loglevels[] = {
+		DEBUG2, LOG, INFO, NOTICE,
+		WARNING, ERROR, FATAL
+	};
+
 	if (objc != 3)
 	{
 		Tcl_WrongNumArgs(interp, 1, objv, "level msg");
@@ -1641,36 +1646,7 @@ pltcl_elog(ClientData cdata, Tcl_Interp *interp,
 		return TCL_ERROR;
 	}
 
-	switch ((enum logpriority) priIndex)
-	{
-		case LOG_DEBUG:
-			level = DEBUG2;
-			break;
-
-		case LOG_LOG:
-			level = LOG;
-			break;
-
-		case LOG_INFO:
-			level = INFO;
-			break;
-
-		case LOG_NOTICE:
-			level = NOTICE;
-			break;
-
-		case LOG_WARNING:
-			level = WARNING;
-			break;
-
-		case LOG_ERROR:
-			level = ERROR;
-			break;
-
-		case LOG_FATAL:
-			level = FATAL;
-			break;
-	}
+	level = loglevels[priIndex];
 
 	if (level == ERROR)
 	{
