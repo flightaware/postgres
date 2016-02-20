@@ -1966,7 +1966,7 @@ pltcl_SPI_execute(ClientData cdata, Tcl_Interp *interp,
 		Tcl_WrongNumArgs(interp, 1, objv,
 						 "?-count n? ?-array name? query ?loop body?");
 		Tcl_SetObjResult(interp,
-		   Tcl_NewStringObj(usage, -1));
+						 Tcl_NewStringObj(usage, -1));
 		return TCL_ERROR;
 	}
 
@@ -2003,7 +2003,7 @@ pltcl_SPI_execute(ClientData cdata, Tcl_Interp *interp,
 	if (query_idx >= objc || query_idx + 2 < objc)
 	{
 		Tcl_SetObjResult(interp,
-		   Tcl_NewStringObj(usage, -1));
+						 Tcl_NewStringObj(usage, -1));
 		Tcl_WrongNumArgs(interp, query_idx - 1, objv, "query ?loop body?");
 		return TCL_ERROR;
 	}
@@ -2388,9 +2388,9 @@ pltcl_SPI_execute_plan(ClientData cdata, Tcl_Interp *interp,
 		if (strlen(nulls) != qdesc->nargs)
 		{
 			Tcl_SetObjResult(interp,
-			   Tcl_NewStringObj(
+							 Tcl_NewStringObj(
 				  "length of nulls string doesn't match number of arguments",
-				   -1));
+											  -1));
 			return TCL_ERROR;
 		}
 	}
@@ -2405,9 +2405,9 @@ pltcl_SPI_execute_plan(ClientData cdata, Tcl_Interp *interp,
 		if (i >= objc)
 		{
 			Tcl_SetObjResult(interp,
-			   Tcl_NewStringObj(
-				  "argument list length doesn't match number of arguments for query"
-				   , -1));
+							 Tcl_NewStringObj(
+			"argument list length doesn't match number of arguments for query"
+											  ,-1));
 			return TCL_ERROR;
 		}
 
@@ -2423,9 +2423,9 @@ pltcl_SPI_execute_plan(ClientData cdata, Tcl_Interp *interp,
 		if (callObjc != qdesc->nargs)
 		{
 			Tcl_SetObjResult(interp,
-			   Tcl_NewStringObj(
-				  "argument list length doesn't match number of arguments for query"
-				   , -1));
+							 Tcl_NewStringObj(
+			"argument list length doesn't match number of arguments for query"
+											  ,-1));
 			return TCL_ERROR;
 		}
 	}
@@ -2441,7 +2441,7 @@ pltcl_SPI_execute_plan(ClientData cdata, Tcl_Interp *interp,
 	if (i != objc)
 	{
 		Tcl_SetObjResult(interp,
-		   Tcl_NewStringObj(usage, -1));
+						 Tcl_NewStringObj(usage, -1));
 		return TCL_ERROR;
 	}
 
