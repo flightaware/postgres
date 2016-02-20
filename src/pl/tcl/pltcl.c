@@ -1965,7 +1965,8 @@ pltcl_SPI_execute(ClientData cdata, Tcl_Interp *interp,
 	{
 		Tcl_WrongNumArgs(interp, 1, objv,
 						 "?-count n? ?-array name? query ?loop body?");
-		Tcl_SetResult(interp, usage, TCL_STATIC);
+		Tcl_SetObjResult(interp,
+		   Tcl_NewStringObj(usage, -1));
 		return TCL_ERROR;
 	}
 
@@ -2001,7 +2002,8 @@ pltcl_SPI_execute(ClientData cdata, Tcl_Interp *interp,
 	query_idx = i;
 	if (query_idx >= objc || query_idx + 2 < objc)
 	{
-		Tcl_SetResult(interp, usage, TCL_STATIC);
+		Tcl_SetObjResult(interp,
+		   Tcl_NewStringObj(usage, -1));
 		Tcl_WrongNumArgs(interp, query_idx - 1, objv, "query ?loop body?");
 		return TCL_ERROR;
 	}
@@ -2385,9 +2387,10 @@ pltcl_SPI_execute_plan(ClientData cdata, Tcl_Interp *interp,
 	{
 		if (strlen(nulls) != qdesc->nargs)
 		{
-			Tcl_SetResult(interp,
+			Tcl_SetObjResult(interp,
+			   Tcl_NewStringObj(
 				  "length of nulls string doesn't match number of arguments",
-						  TCL_STATIC);
+				   -1));
 			return TCL_ERROR;
 		}
 	}
@@ -2401,7 +2404,10 @@ pltcl_SPI_execute_plan(ClientData cdata, Tcl_Interp *interp,
 
 		if (i >= objc)
 		{
-			Tcl_SetResult(interp, "missing argument list", TCL_STATIC);
+			Tcl_SetObjResult(interp,
+			   Tcl_NewStringObj(
+				  "argument list length doesn't match number of arguments for query"
+				   , -1));
 			return TCL_ERROR;
 		}
 
@@ -2416,9 +2422,10 @@ pltcl_SPI_execute_plan(ClientData cdata, Tcl_Interp *interp,
 		 ************************************************************/
 		if (callObjc != qdesc->nargs)
 		{
-			Tcl_SetResult(interp,
-						  "argument list length doesn't match number of arguments for query",
-						  TCL_STATIC);
+			Tcl_SetObjResult(interp,
+			   Tcl_NewStringObj(
+				  "argument list length doesn't match number of arguments for query"
+				   , -1));
 			return TCL_ERROR;
 		}
 	}
@@ -2433,7 +2440,8 @@ pltcl_SPI_execute_plan(ClientData cdata, Tcl_Interp *interp,
 
 	if (i != objc)
 	{
-		Tcl_SetResult(interp, usage, TCL_STATIC);
+		Tcl_SetObjResult(interp,
+		   Tcl_NewStringObj(usage, -1));
 		return TCL_ERROR;
 	}
 
