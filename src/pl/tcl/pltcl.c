@@ -47,11 +47,6 @@
 	((TCL_MAJOR_VERSION > maj) || \
 	 (TCL_MAJOR_VERSION == maj && TCL_MINOR_VERSION >= min))
 
-/* In Tcl >= 8.0, really not supposed to touch interp->result directly */
-#if !HAVE_TCL_VERSION(8,0)
-#define Tcl_GetStringResult(interp)  ((interp)->result)
-#endif
-
 /* define our text domain for translations */
 #undef TEXTDOMAIN
 #define TEXTDOMAIN PG_TEXTDOMAIN("pltcl")
