@@ -2277,8 +2277,6 @@ pltcl_SPI_prepare(ClientData cdata, Tcl_Interp *interp,
 	hashent = Tcl_CreateHashEntry(query_hash, qdesc->qname, &hashnew);
 	Tcl_SetHashValue(hashent, (ClientData) qdesc);
 
-	/* ckfree((char *) args); */
-
 	/* qname is ASCII, so no need for encoding conversion */
 	Tcl_SetObjResult(interp, Tcl_NewStringObj(qdesc->qname, -1));
 	return TCL_OK;
