@@ -1618,12 +1618,6 @@ pltcl_elog(ClientData cdata, Tcl_Interp *interp,
 	MemoryContext oldcontext;
 	int			priIndex;
 
-	enum logpriority
-	{
-		LOG_DEBUG, LOG_LOG, LOG_INFO, LOG_NOTICE,
-		LOG_WARNING, LOG_ERROR, LOG_FATAL
-	};
-
 	static CONST84 char *logpriorities[] = {
 		"DEBUG", "LOG", "INFO", "NOTICE",
 		"WARNING", "ERROR", "FATAL", (char *) NULL
