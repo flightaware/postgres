@@ -47,11 +47,6 @@
 	((TCL_MAJOR_VERSION > maj) || \
 	 (TCL_MAJOR_VERSION == maj && TCL_MINOR_VERSION >= min))
 
-/* In Tcl >= 8.0, really not supposed to touch interp->result directly */
-#if !HAVE_TCL_VERSION(8,0)
-#define Tcl_GetStringResult(interp)  ((interp)->result)
-#endif
-
 /* define our text domain for translations */
 #undef TEXTDOMAIN
 #define TEXTDOMAIN PG_TEXTDOMAIN("pltcl")
@@ -1634,6 +1629,11 @@ pltcl_elog(ClientData cdata, Tcl_Interp *interp,
 		"WARNING", "ERROR", "FATAL", (char *) NULL
 	};
 
+	static CONST84 int loglevels[] = {
+		DEBUG2, LOG, INFO, NOTICE,
+		WARNING, ERROR, FATAL
+	};
+
 	if (objc != 3)
 	{
 		Tcl_WrongNumArgs(interp, 1, objv, "level msg");
@@ -1646,36 +1646,7 @@ pltcl_elog(ClientData cdata, Tcl_Interp *interp,
 		return TCL_ERROR;
 	}
 
-	switch ((enum logpriority) priIndex)
-	{
-		case LOG_DEBUG:
-			level = DEBUG2;
-			break;
-
-		case LOG_LOG:
-			level = LOG;
-			break;
-
-		case LOG_INFO:
-			level = INFO;
-			break;
-
-		case LOG_NOTICE:
-			level = NOTICE;
-			break;
-
-		case LOG_WARNING:
-			level = WARNING;
-			break;
-
-		case LOG_ERROR:
-			level = ERROR;
-			break;
-
-		case LOG_FATAL:
-			level = FATAL;
-			break;
-	}
+	level = loglevels[priIndex];
 
 	if (level == ERROR)
 	{
@@ -1994,7 +1965,8 @@ pltcl_SPI_execute(ClientData cdata, Tcl_Interp *interp,
 	{
 		Tcl_WrongNumArgs(interp, 1, objv,
 						 "?-count n? ?-array name? query ?loop body?");
-		Tcl_SetResult(interp, usage, TCL_STATIC);
+		Tcl_SetObjResult(interp,
+						 Tcl_NewStringObj(usage, -1));
 		return TCL_ERROR;
 	}
 
@@ -2030,7 +2002,8 @@ pltcl_SPI_execute(ClientData cdata, Tcl_Interp *interp,
 	query_idx = i;
 	if (query_idx >= objc || query_idx + 2 < objc)
 	{
-		Tcl_SetResult(interp, usage, TCL_STATIC);
+		Tcl_SetObjResult(interp,
+						 Tcl_NewStringObj(usage, -1));
 		Tcl_WrongNumArgs(interp, query_idx - 1, objv, "query ?loop body?");
 		return TCL_ERROR;
 	}
@@ -2304,8 +2277,6 @@ pltcl_SPI_prepare(ClientData cdata, Tcl_Interp *interp,
 	hashent = Tcl_CreateHashEntry(query_hash, qdesc->qname, &hashnew);
 	Tcl_SetHashValue(hashent, (ClientData) qdesc);
 
-	/* ckfree((char *) args); */
-
 	/* qname is ASCII, so no need for encoding conversion */
 	Tcl_SetObjResult(interp, Tcl_NewStringObj(qdesc->qname, -1));
 	return TCL_OK;
@@ -2414,9 +2385,10 @@ pltcl_SPI_execute_plan(ClientData cdata, Tcl_Interp *interp,
 	{
 		if (strlen(nulls) != qdesc->nargs)
 		{
-			Tcl_SetResult(interp,
+			Tcl_SetObjResult(interp,
+							 Tcl_NewStringObj(
 				  "length of nulls string doesn't match number of arguments",
-						  TCL_STATIC);
+											  -1));
 			return TCL_ERROR;
 		}
 	}
@@ -2430,7 +2402,10 @@ pltcl_SPI_execute_plan(ClientData cdata, Tcl_Interp *interp,
 
 		if (i >= objc)
 		{
-			Tcl_SetResult(interp, "missing argument list", TCL_STATIC);
+			Tcl_SetObjResult(interp,
+							 Tcl_NewStringObj(
+			"argument list length doesn't match number of arguments for query"
+											  ,-1));
 			return TCL_ERROR;
 		}
 
@@ -2445,9 +2420,10 @@ pltcl_SPI_execute_plan(ClientData cdata, Tcl_Interp *interp,
 		 ************************************************************/
 		if (callObjc != qdesc->nargs)
 		{
-			Tcl_SetResult(interp,
-						  "argument list length doesn't match number of arguments for query",
-						  TCL_STATIC);
+			Tcl_SetObjResult(interp,
+							 Tcl_NewStringObj(
+			"argument list length doesn't match number of arguments for query"
+											  ,-1));
 			return TCL_ERROR;
 		}
 	}
@@ -2462,7 +2438,8 @@ pltcl_SPI_execute_plan(ClientData cdata, Tcl_Interp *interp,
 
 	if (i != objc)
 	{
-		Tcl_SetResult(interp, usage, TCL_STATIC);
+		Tcl_SetObjResult(interp,
+						 Tcl_NewStringObj(usage, -1));
 		return TCL_ERROR;
 	}
 
