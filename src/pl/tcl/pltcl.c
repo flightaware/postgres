@@ -234,6 +234,7 @@ static void pltcl_set_tuple_values(Tcl_Interp *interp, CONST84 char *arrayname,
 					   int tupno, HeapTuple tuple, TupleDesc tupdesc);
 static void pltcl_build_tuple_argument(HeapTuple tuple, TupleDesc tupdesc,
 						   Tcl_Obj * retobj);
+static void pltcl_construct_errorCode(Tcl_Interp *interp, ErrorData *edata);
 
 
 /*
@@ -1606,6 +1607,77 @@ compile_pltcl_function(Oid fn_oid, Oid tgreloid,
 	return prodesc;
 }
 
+/**********************************************************************
+ * pltcl_construct_errorCode()		- construct a Tcl errorCode
+ *		list with detailed information from the PostgreSQL server
+ **********************************************************************/
+static void
+pltcl_construct_errorCode(Tcl_Interp *interp, ErrorData *edata)
+{
+	Tcl_Obj    *obj = Tcl_NewObj();
+
+	Tcl_ListObjAppendElement(interp, obj, Tcl_NewStringObj("POSTGRES", -1));
+	Tcl_ListObjAppendElement(interp, obj, Tcl_NewStringObj("message", -1));
+	Tcl_ListObjAppendElement(interp, obj, Tcl_NewStringObj(edata->message, -1));
+
+	if (edata->detail)
+	{
+		Tcl_ListObjAppendElement(interp, obj, Tcl_NewStringObj("detail", -1));
+		Tcl_ListObjAppendElement(interp, obj, Tcl_NewStringObj(edata->detail, -1));
+	}
+	if (edata->detail_log)
+	{
+		Tcl_ListObjAppendElement(interp, obj, Tcl_NewStringObj("detail_log", -1));
+		Tcl_ListObjAppendElement(interp, obj, Tcl_NewStringObj(edata->detail_log, -1));
+	}
+	if (edata->hint)
+	{
+		Tcl_ListObjAppendElement(interp, obj, Tcl_NewStringObj("hint", -1));
+		Tcl_ListObjAppendElement(interp, obj, Tcl_NewStringObj(edata->hint, -1));
+	}
+	if (edata->context)
+	{
+		Tcl_ListObjAppendElement(interp, obj, Tcl_NewStringObj("context", -1));
+		Tcl_ListObjAppendElement(interp, obj, Tcl_NewStringObj(edata->context, -1));
+	}
+	if (edata->schema_name)
+	{
+		Tcl_ListObjAppendElement(interp, obj, Tcl_NewStringObj("schema", -1));
+		Tcl_ListObjAppendElement(interp, obj, Tcl_NewStringObj(edata->schema_name, -1));
+	}
+	if (edata->table_name)
+	{
+		Tcl_ListObjAppendElement(interp, obj, Tcl_NewStringObj("table", -1));
+		Tcl_ListObjAppendElement(interp, obj, Tcl_NewStringObj(edata->table_name, -1));
+	}
+	if (edata->column_name)
+	{
+		Tcl_ListObjAppendElement(interp, obj, Tcl_NewStringObj("column", -1));
+		Tcl_ListObjAppendElement(interp, obj, Tcl_NewStringObj(edata->column_name, -1));
+	}
+	if (edata->datatype_name)
+	{
+		Tcl_ListObjAppendElement(interp, obj, Tcl_NewStringObj("datatype", -1));
+		Tcl_ListObjAppendElement(interp, obj, Tcl_NewStringObj(edata->datatype_name, -1));
+	}
+	if (edata->constraint_name)
+	{
+		Tcl_ListObjAppendElement(interp, obj, Tcl_NewStringObj("constraint", -1));
+		Tcl_ListObjAppendElement(interp, obj, Tcl_NewStringObj(edata->constraint_name, -1));
+	}
+	Tcl_ListObjAppendElement(interp, obj, Tcl_NewStringObj("cursorpos", -1));
+	Tcl_ListObjAppendElement(interp, obj, Tcl_NewIntObj(edata->cursorpos));
+	if (edata->internalquery)
+	{
+		Tcl_ListObjAppendElement(interp, obj, Tcl_NewStringObj("internalquery", -1));
+		Tcl_ListObjAppendElement(interp, obj, Tcl_NewStringObj(edata->internalquery, -1));
+		Tcl_ListObjAppendElement(interp, obj, Tcl_NewStringObj("internalpos", -1));
+		Tcl_ListObjAppendElement(interp, obj, Tcl_NewIntObj(edata->internalpos));
+	}
+
+	Tcl_SetObjErrorCode(interp, obj);
+}
+
 
 /**********************************************************************
  * pltcl_elog()		- elog() support for PLTcl
@@ -1684,6 +1756,7 @@ pltcl_elog(ClientData cdata, Tcl_Interp *interp,
 		UTF_BEGIN;
 		Tcl_SetObjResult(interp, Tcl_NewStringObj(UTF_E2U(edata->message), -1));
 		UTF_END;
+		pltcl_construct_errorCode(interp, edata);
 		FreeErrorData(edata);
 
 		return TCL_ERROR;
@@ -1916,6 +1989,7 @@ pltcl_subtrans_abort(Tcl_Interp *interp,
 	UTF_BEGIN;
 	Tcl_SetResult(interp, UTF_E2U(edata->message), TCL_VOLATILE);
 	UTF_END;
+	pltcl_construct_errorCode(interp, edata);
 	FreeErrorData(edata);
 }
 
