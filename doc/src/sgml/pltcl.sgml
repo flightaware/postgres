@@ -775,6 +775,35 @@ CREATE EVENT TRIGGER tcl_a_snitch ON ddl_command_start EXECUTE PROCEDURE tclsnit
     </para>
    </sect1>
 
+   <sect1 id="pltcl-error-handling">
+    <title>Error Handling in PL/Tcl</title>
+
+    <indexterm>
+     <primary>error handling</primary>
+     <secondary>in PL/Tcl</secondary>
+    </indexterm>
+
+    <para>
+	 All Tcl errors that are allowed to traceback to the top level of the interpreter, that is, errors not caught within the stored procedure using the Tcl <function>catch</function> command will rase a database error.
+    </para>
+    <para>
+	 Tcl code within or called from the stored procedure can choose to raise a database error by invoking the <function>elog</function> command provided by Tcl or by generating an error using the Tcl <function>error</function> command and not catching it with Tcl's <function>catch</function> command.
+    </para>
+    <para>
+	 Database errors that occur from the PL/Tcl stored procedure's use of <function>spi_exec</function>, <function>spi_prepare</funtion>, and <funtion>spi_execp</function> will also be caught by Tcl's <function>catch</function> command.
+    </para>
+    <para>
+	 Tcl provides an <varname>errorCode</varname> variable that can represent additional information about the error in a form that is easy to process with programs.  The contents are in Tcl list format and the first word should identify the subsystem or application responsible for the error and beyond that it is up to the individual code or library.  For example after failing to open a file using Tcl's open command, <varname>errorCode</varname> might contain <literal>POSIX ENOENT {no such file or directory}</literal> 
+	 where the third element would vary by locale, the first and second will not.
+    </para>
+    <para>
+	 When <function>spi_exec</function>, <function>spi_prepare</function> or <function>spi_execp</function> cause a database error to be raised, that database eror propagates back to Tcl as a Tcl error that can be caught.  In this case <varname>errorCode</varname> is set to a list where the first element is <literal>POSTGRES</literal> followed by a copious decoding of the Postgres error structure.  Since fields in the structure may or may not be present depending on the nature of the error, how the function was invoked, etc, subsequent elements of the <varname>errorCode</varname> list are key-value pairs where the first value is the name of the field and the second is its value.
+    </para>
+    <para>
+	 Fields that may be present include message, detail, detail_log, hint, context, schema, table, column, datatype, constraint, cursor position, the internal query text and the internal position.
+    </para>
+   </sect1>
+
    <sect1 id="pltcl-unknown">
        <title>Modules and the <function>unknown</> Command</title>
        <para>
