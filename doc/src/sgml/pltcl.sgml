@@ -792,7 +792,7 @@ CREATE EVENT TRIGGER tcl_a_snitch ON ddl_command_start EXECUTE PROCEDURE tclsnit
     <para>
      Tcl code within or called from the stored procedure can choose to
      raise a database error by invoking the <function>elog</function>
-     command provided by Tcl or by generating an error using the Tcl
+     command provided by PL/Tcl or by generating an error using the Tcl
      <function>error</function> command and not catching it with Tcl's
      <function>catch</function> command.
     </para>
@@ -805,7 +805,7 @@ CREATE EVENT TRIGGER tcl_a_snitch ON ddl_command_start EXECUTE PROCEDURE tclsnit
     <para>
      Tcl provides an <varname>errorCode</varname> variable that can
      represent additional information about the error in a form that
-     is easy for programs to make sense of.  The contents are in Tcl list
+     is easy for programs to interpret.  The contents are in Tcl list
      format and the first word identifies the subsystem or
      library responsible for the error and beyond that the contents are left
      to the individual code or library.  For example if Tcl's
@@ -818,8 +818,8 @@ CREATE EVENT TRIGGER tcl_a_snitch ON ddl_command_start EXECUTE PROCEDURE tclsnit
     <para>
      When <function>spi_exec</function>, <function>spi_prepare</function>
      or <function>spi_execp</function> cause a database error to be raised,
-     that database eror propagates back to Tcl as a Tcl error that can be
-     caught.  In this case <varname>errorCode</varname> is set to a list
+     that database eror propagates back to Tcl as a Tcl error.
+     In this case <varname>errorCode</varname> is set to a list
      where the first element is <literal>POSTGRES</literal> followed by a
      copious decoding of the Postgres error structure.  Since fields in the
      structure may or may not be present depending on the nature of the
@@ -848,6 +848,51 @@ CREATE EVENT TRIGGER tcl_a_snitch ON ddl_command_start EXECUTE PROCEDURE tclsnit
         array set errorRow [lrange $errorCode 1 end]
     }
 </programlisting>
+    </para>
+    <para>
+     In the example below we cause an error by attempting to
+     <command>SELECT</> from a table that doesn't exist.
+<screen>
+select tcl_eval('spi_exec "select * from foo;"');
+</screen>
+<screen>
+<computeroutput>
+ERROR:  relation "foo" does not exist
+</computeroutput>
+</screen>
+    </para>
+    <para>
+     Now we examine the error code.  (The double-colons explicitly
+     reference <varname>errorCode</varname> as a global variable.)
+<screen>
+select tcl_eval('join $::errorCode "\n"');
+</screen>
+<screen>
+<computeroutput>
+           tcl_eval            
+-------------------------------
+ POSTGRES                     +
+ message                      +
+ relation "foo" does not exist+
+ domain                       +
+ postgres-9.6                 +
+ context_domain               +
+ postgres-9.6                 +
+ cursorpos                    +
+ 0                            +
+ internalquery                +
+ select * from foo;           +
+ internalpos                  +
+ 15                           +
+ filename                     +
+ parse_relation.c             +
+ lineno                       +
+ 1159                         +
+ funcname                     +
+ parserOpenTable
+(1 row)
+</computeroutput>
+</screen>
     </para>
    </sect1>
 
