@@ -1635,6 +1635,16 @@ pltcl_construct_errorCode(Tcl_Interp *interp, ErrorData *edata)
 		Tcl_ListObjAppendElement(interp, obj, Tcl_NewStringObj("hint", -1));
 		Tcl_ListObjAppendElement(interp, obj, Tcl_NewStringObj(edata->hint, -1));
 	}
+	if (edata->domain)
+	{
+		Tcl_ListObjAppendElement(interp, obj, Tcl_NewStringObj("domain", -1));
+		Tcl_ListObjAppendElement(interp, obj, Tcl_NewStringObj(edata->domain, -1));
+	}
+	if (edata->context_domain)
+	{
+		Tcl_ListObjAppendElement(interp, obj, Tcl_NewStringObj("context_domain", -1));
+		Tcl_ListObjAppendElement(interp, obj, Tcl_NewStringObj(edata->context_domain, -1));
+	}
 	if (edata->context)
 	{
 		Tcl_ListObjAppendElement(interp, obj, Tcl_NewStringObj("context", -1));
@@ -1665,14 +1675,23 @@ pltcl_construct_errorCode(Tcl_Interp *interp, ErrorData *edata)
 		Tcl_ListObjAppendElement(interp, obj, Tcl_NewStringObj("constraint", -1));
 		Tcl_ListObjAppendElement(interp, obj, Tcl_NewStringObj(edata->constraint_name, -1));
 	}
-	Tcl_ListObjAppendElement(interp, obj, Tcl_NewStringObj("cursorpos", -1));
+	Tcl_ListObjAppendElement(interp, obj, Tcl_NewStringObj("cursor_position", -1));
 	Tcl_ListObjAppendElement(interp, obj, Tcl_NewIntObj(edata->cursorpos));
 	if (edata->internalquery)
 	{
 		Tcl_ListObjAppendElement(interp, obj, Tcl_NewStringObj("internalquery", -1));
 		Tcl_ListObjAppendElement(interp, obj, Tcl_NewStringObj(edata->internalquery, -1));
-		Tcl_ListObjAppendElement(interp, obj, Tcl_NewStringObj("internalpos", -1));
+		Tcl_ListObjAppendElement(interp, obj, Tcl_NewStringObj("internal_position", -1));
 		Tcl_ListObjAppendElement(interp, obj, Tcl_NewIntObj(edata->internalpos));
+	}
+	if (edata->filename)
+	{
+		Tcl_ListObjAppendElement(interp, obj, Tcl_NewStringObj("filename", -1));
+		Tcl_ListObjAppendElement(interp, obj, Tcl_NewStringObj(edata->filename, -1));
+		Tcl_ListObjAppendElement(interp, obj, Tcl_NewStringObj("lineno", -1));
+		Tcl_ListObjAppendElement(interp, obj, Tcl_NewIntObj(edata->lineno));
+		Tcl_ListObjAppendElement(interp, obj, Tcl_NewStringObj("funcname", -1));
+		Tcl_ListObjAppendElement(interp, obj, Tcl_NewStringObj(edata->funcname, -1));
 	}
 
 	Tcl_SetObjErrorCode(interp, obj);
