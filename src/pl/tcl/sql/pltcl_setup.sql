@@ -577,3 +577,12 @@ drop table foo;
 
 drop event trigger tcl_a_snitch;
 drop event trigger tcl_b_snitch;
+
+
+-- test error handling
+CREATE OR REPLACE FUNCTION tcl_eval (varchar) RETURNS varchar AS $$
+eval $1
+$$ LANGUAGE pltcl;
+
+select tcl_eval('spi_exec "select * from foo;"');
+select tcl_eval('join $::errorCode "\n"');
