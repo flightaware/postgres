@@ -585,4 +585,4 @@ eval $1
 $$ LANGUAGE pltcl;
 
 select tcl_eval('spi_exec "select * from foo;"');
-select tcl_eval('join $::errorCode "\n"');
+select tcl_eval('set list [lindex $::errorCode 0]; foreach "key value" [lrange $::errorCode 1 end] {if {$key == "domain" || $key == "context_domain" || $key == "lineno"} continue; lappend list $key $value}; return [join $list "\n"]');
