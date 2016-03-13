@@ -1586,6 +1586,8 @@ pltcl_construct_errorCode(Tcl_Interp *interp, ErrorData *edata)
 	Tcl_Obj    *obj = Tcl_NewObj();
 
 	Tcl_ListObjAppendElement(interp, obj, Tcl_NewStringObj("POSTGRES", -1));
+	Tcl_ListObjAppendElement(interp, obj, Tcl_NewStringObj("SQLSTATE", -1));
+	Tcl_ListObjAppendElement(interp, obj, Tcl_NewStringObj(unpack_sql_state(edata->sqlerrcode), -1));
 	Tcl_ListObjAppendElement(interp, obj, Tcl_NewStringObj("message", -1));
 	Tcl_ListObjAppendElement(interp, obj, Tcl_NewStringObj(edata->message, -1));
 

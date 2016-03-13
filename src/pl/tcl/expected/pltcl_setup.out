@@ -582,6 +582,8 @@ $$);
            tcl_eval            
 -------------------------------
  POSTGRES                     +
+ SQLSTATE                     +
+ 42P01                        +
  message                      +
  relation "foo" does not exist+
  cursor_position              +
