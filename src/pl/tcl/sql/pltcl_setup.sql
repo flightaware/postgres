@@ -614,7 +614,9 @@ select pg_temp.tcl_eval('spi_exec "select * from foo;"');
 select pg_temp.tcl_eval($$
 set list [lindex $::errorCode 0];
 foreach "key value" [lrange $::errorCode 1 end] {
-	if {$key == "domain" || $key == "context_domain" || $key == "lineno"} continue;
+	if {$key == "domain" || $key == "context_domain" || $key == "lineno"} {
+		regsub -all {[0-9]} $value "" value
+	}
 	lappend list $key $value
 };
 return [join $list "\n"]

@@ -571,7 +571,9 @@ ERROR:  relation "foo" does not exist
 select pg_temp.tcl_eval($$
 set list [lindex $::errorCode 0];
 foreach "key value" [lrange $::errorCode 1 end] {
-	if {$key == "domain" || $key == "context_domain" || $key == "lineno"} continue;
+	if {$key == "domain" || $key == "context_domain" || $key == "lineno"} {
+		regsub -all {[0-9]} $value "" value
+	}
 	lappend list $key $value
 };
 return [join $list "\n"]
@@ -583,6 +585,10 @@ $$);
  42P01                        +
  message                      +
  relation "foo" does not exist+
+ domain                       +
+ postgres-.                   +
+ context_domain               +
+ postgres-.                   +
  cursor_position              +
  0                            +
  internalquery                +
@@ -591,6 +597,8 @@ $$);
  15                           +
  filename                     +
  parse_relation.c             +
+ lineno                       +
+                              +
  funcname                     +
  parserOpenTable
 (1 row)
