@@ -12,8 +12,9 @@
 /* system stuff */
 #include <ctype.h>
 #include <fcntl.h>
-#include <unistd.h>
+#include <limits.h>
 #include <locale.h>
+#include <unistd.h>
 
 /* postgreSQL stuff */
 #include "access/htup_details.h"
@@ -281,7 +282,7 @@ static Datum plperl_hash_to_datum(SV *src, TupleDesc td);
 static void plperl_init_shared_libs(pTHX);
 static void plperl_trusted_init(void);
 static void plperl_untrusted_init(void);
-static HV  *plperl_spi_execute_fetch_result(SPITupleTable *, int, int);
+static HV  *plperl_spi_execute_fetch_result(SPITupleTable *, uint64, int);
 static char *hek2cstr(HE *he);
 static SV **hv_store_string(HV *hv, const char *key, SV *val);
 static SV **hv_fetch_string(HV *hv, const char *key);
@@ -1450,21 +1451,29 @@ plperl_ref_from_pg_array(Datum arg, Oid typid)
 	info->ndims = ARR_NDIM(ar);
 	dims = ARR_DIMS(ar);
 
-	deconstruct_array(ar, elementtype, typlen, typbyval,
-					  typalign, &info->elements, &info->nulls,
-					  &nitems);
+	/* No dimensions? Return an empty array */
+	if (info->ndims == 0)
+	{
+		av = newRV_noinc((SV *) newAV());
+	}
+	else
+	{
+		deconstruct_array(ar, elementtype, typlen, typbyval,
+						  typalign, &info->elements, &info->nulls,
+						  &nitems);
 
-	/* Get total number of elements in each dimension */
-	info->nelems = palloc(sizeof(int) * info->ndims);
-	info->nelems[0] = nitems;
-	for (i = 1; i < info->ndims; i++)
-		info->nelems[i] = info->nelems[i - 1] / dims[i - 1];
+		/* Get total number of elements in each dimension */
+		info->nelems = palloc(sizeof(int) * info->ndims);
+		info->nelems[0] = nitems;
+		for (i = 1; i < info->ndims; i++)
+			info->nelems[i] = info->nelems[i - 1] / dims[i - 1];
 
-	av = split_array(info, 0, nitems, 0);
+		av = split_array(info, 0, nitems, 0);
+	}
 
 	hv = newHV();
 	(void) hv_store(hv, "array", 5, av, 0);
-	(void) hv_store(hv, "typeoid", 7, newSViv(typid), 0);
+	(void) hv_store(hv, "typeoid", 7, newSVuv(typid), 0);
 
 	return sv_bless(newRV_noinc((SV *) hv),
 					gv_stashpv("PostgreSQL::InServer::ARRAY", 0));
@@ -1478,6 +1487,9 @@ split_array(plperl_array_info *info, int first, int last, int nest)
 {
 	int			i;
 	AV		   *result;
+
+	/* we should only be called when we have something to split */
+	Assert(info->ndims > 0);
 
 	/* since this function recurses, it could be driven to stack overflow */
 	check_stack_depth();
@@ -3080,7 +3092,7 @@ plperl_spi_exec(char *query, int limit)
 
 
 static HV  *
-plperl_spi_execute_fetch_result(SPITupleTable *tuptable, int processed,
+plperl_spi_execute_fetch_result(SPITupleTable *tuptable, uint64 processed,
 								int status)
 {
 	HV		   *result;
@@ -3092,13 +3104,25 @@ plperl_spi_execute_fetch_result(SPITupleTable *tuptable, int processed,
 	hv_store_string(result, "status",
 					cstr2sv(SPI_result_code_string(status)));
 	hv_store_string(result, "processed",
-					newSViv(processed));
+					(processed > (uint64) INT_MAX) ?
+					newSVnv((double) processed) :
+					newSViv((int) processed));
 
 	if (status > 0 && tuptable)
 	{
 		AV		   *rows;
 		SV		   *row;
-		int			i;
+		uint64		i;
+
+		/*
+		 * av_extend's 2nd argument is declared I32.  It's possible we could
+		 * nonetheless push more than INT_MAX elements into a Perl array, but
+		 * let's just fail instead of trying.
+		 */
+		if (processed > (uint64) INT_MAX)
+			ereport(ERROR,
+					(errcode(ERRCODE_PROGRAM_LIMIT_EXCEEDED),
+			errmsg("query result has too many rows to fit in a Perl array")));
 
 		rows = newAV();
 		av_extend(rows, processed);
