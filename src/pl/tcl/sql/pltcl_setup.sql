@@ -598,6 +598,14 @@ drop event trigger tcl_b_snitch;
 
 
 -- test error handling
+
+/*
+ * The ugly hack of messsing with the verbosity is because the error context is
+ * set to the TCL variable errorInfo, which contains some unstable data (namely
+ * the full name of the TCL function created by the handler, which includes the
+ * Postgres backend PID).
+ */
+\set VERBOSITY terse
 CREATE OR REPLACE FUNCTION pg_temp.tcl_eval (varchar) RETURNS varchar AS $$
 eval $1
 $$ LANGUAGE pltcl;
