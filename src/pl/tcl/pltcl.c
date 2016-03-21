@@ -1702,8 +1702,6 @@ pltcl_elog(ClientData cdata, Tcl_Interp *interp,
 
 	level = loglevels[priIndex];
 
-	level = loglevels[priIndex];
-
 	if (level == ERROR)
 	{
 		/*
