@@ -5,7 +5,7 @@
  *	Lately it's also being used by psql and bin/scripts/ ...
  *
  *
- * Portions Copyright (c) 1996-2015, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2016, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  * src/bin/pg_dump/dumputils.h
@@ -38,6 +38,8 @@ typedef struct SimpleOidList
 typedef struct SimpleStringListCell
 {
 	struct SimpleStringListCell *next;
+	bool		touched;		/* true, when this string was searched and
+								 * touched */
 	char		val[FLEXIBLE_ARRAY_MEMBER];		/* null-terminated string here */
 } SimpleStringListCell;
 
@@ -103,5 +105,7 @@ extern void set_dump_section(const char *arg, int *dumpSections);
 
 extern void simple_string_list_append(SimpleStringList *list, const char *val);
 extern bool simple_string_list_member(SimpleStringList *list, const char *val);
+extern const char *simple_string_list_not_touched(SimpleStringList *list);
+
 
 #endif   /* DUMPUTILS_H */

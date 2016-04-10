@@ -7,7 +7,7 @@
  *	  pg_shadow and pg_group are now publicly accessible views on pg_authid.
  *
  *
- * Portions Copyright (c) 1996-2015, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2016, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  * src/include/catalog/pg_authid.h
@@ -51,7 +51,7 @@ CATALOG(pg_authid,1260) BKI_SHARED_RELATION BKI_ROWTYPE_OID(2842) BKI_SCHEMA_MAC
 	bool		rolcreatedb;	/* allowed to create databases? */
 	bool		rolcanlogin;	/* allowed to log in as session user? */
 	bool		rolreplication; /* role used for streaming replication */
-	bool		rolbypassrls;	/* allowed to bypass row level security? */
+	bool		rolbypassrls;	/* bypasses row level security? */
 	int32		rolconnlimit;	/* max connections allowed (-1=no limit) */
 
 	/* remaining fields may be null; use heap_getattr to read them! */

@@ -7,7 +7,7 @@
  *	  of the API of the memory management subsystem.
  *
  *
- * Portions Copyright (c) 1996-2015, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2016, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  * src/include/utils/memutils.h
@@ -104,6 +104,7 @@ extern MemoryContext GetMemoryChunkContext(void *pointer);
 extern MemoryContext MemoryContextGetParent(MemoryContext context);
 extern bool MemoryContextIsEmpty(MemoryContext context);
 extern void MemoryContextStats(MemoryContext context);
+extern void MemoryContextStatsDetail(MemoryContext context, int max_children);
 extern void MemoryContextAllowInCriticalSection(MemoryContext context,
 									bool allow);
 

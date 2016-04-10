@@ -7,7 +7,7 @@
  * by the PG_KEYWORD macro, which is not defined in this file; it can
  * be defined by the caller for special purposes.
  *
- * Portions Copyright (c) 1996-2015, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2016, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  * IDENTIFICATION
@@ -281,6 +281,7 @@ PG_KEYWORD("overlaps", OVERLAPS, TYPE_FUNC_NAME_KEYWORD)
 PG_KEYWORD("overlay", OVERLAY, COL_NAME_KEYWORD)
 PG_KEYWORD("owned", OWNED, UNRESERVED_KEYWORD)
 PG_KEYWORD("owner", OWNER, UNRESERVED_KEYWORD)
+PG_KEYWORD("parallel", PARALLEL, UNRESERVED_KEYWORD)
 PG_KEYWORD("parser", PARSER, UNRESERVED_KEYWORD)
 PG_KEYWORD("partial", PARTIAL, UNRESERVED_KEYWORD)
 PG_KEYWORD("partition", PARTITION, UNRESERVED_KEYWORD)

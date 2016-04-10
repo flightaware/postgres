@@ -4,7 +4,7 @@
  *	  POSTGRES error reporting/logging definitions.
  *
  *
- * Portions Copyright (c) 1996-2015, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2016, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  * src/include/utils/elog.h
@@ -266,7 +266,7 @@ extern PGDLLIMPORT ErrorContextCallback *error_context_stack;
  *		PG_END_TRY();
  *
  * (The braces are not actually necessary, but are recommended so that
- * pg_indent will indent the construct nicely.)  The error recovery code
+ * pgindent will indent the construct nicely.)  The error recovery code
  * can optionally do PG_RE_THROW() to propagate the same error outwards.
  *
  * Note: while the system will correctly propagate any new ereport(ERROR)

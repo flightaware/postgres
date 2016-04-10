@@ -2,7 +2,7 @@
  *
  * pg_dumpall.c
  *
- * Portions Copyright (c) 1996-2015, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2016, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  * pg_dumpall forces all pg_dump output to be text, since it also outputs
@@ -1411,6 +1411,24 @@ dumpCreateDB(PGconn *conn)
 								  dbconnlimit);
 
 			appendPQExpBufferStr(buf, ";\n");
+		}
+		else if (strcmp(dbtablespace, "pg_default") != 0 && !no_tablespaces)
+		{
+			/*
+			 * Cannot change tablespace of the database we're connected to, so
+			 * to move "postgres" to another tablespace, we connect to
+			 * "template1", and vice versa.
+			 */
+			if (strcmp(dbname, "postgres") == 0)
+				appendPQExpBuffer(buf, "\\connect template1\n");
+			else
+				appendPQExpBuffer(buf, "\\connect postgres\n");
+
+			appendPQExpBuffer(buf, "ALTER DATABASE %s SET TABLESPACE %s;\n",
+							  fdbname, fmtId(dbtablespace));
+
+			/* connect to original database */
+			appendPQExpBuffer(buf, "\\connect %s\n", fdbname);
 		}
 
 		if (binary_upgrade)

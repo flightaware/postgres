@@ -3,7 +3,7 @@
  * nodeFuncs.h
  *		Various general-purpose manipulations of Node trees
  *
- * Portions Copyright (c) 1996-2015, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2016, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  * src/include/nodes/nodeFuncs.h
@@ -62,5 +62,9 @@ extern Node *query_or_expression_tree_mutator(Node *node, Node *(*mutator) (),
 
 extern bool raw_expression_tree_walker(Node *node, bool (*walker) (),
 												   void *context);
+
+struct PlanState;
+extern bool planstate_tree_walker(struct PlanState *planstate, bool (*walker) (),
+											  void *context);
 
 #endif   /* NODEFUNCS_H */

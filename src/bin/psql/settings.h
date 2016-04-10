@@ -1,7 +1,7 @@
 /*
  * psql - the PostgreSQL interactive terminal
  *
- * Copyright (c) 2000-2015, PostgreSQL Global Development Group
+ * Copyright (c) 2000-2016, PostgreSQL Global Development Group
  *
  * src/bin/psql/settings.h
  */
@@ -129,6 +129,7 @@ typedef struct _psqlSettings
 	const char *prompt2;
 	const char *prompt3;
 	PGVerbosity verbosity;		/* current error verbosity level */
+	PGContextVisibility show_context;	/* current context display level */
 } PsqlSettings;
 
 extern PsqlSettings pset;

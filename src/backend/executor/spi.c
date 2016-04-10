@@ -3,7 +3,7 @@
  * spi.c
  *				Server Programming Interface
  *
- * Portions Copyright (c) 1996-2015, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2016, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  *
@@ -1797,7 +1797,8 @@ spi_printtup(TupleTableSlot *slot, DestReceiver *self)
 
 	if (tuptable->free == 0)
 	{
-		tuptable->free = 256;
+		/* Double the size of the pointer array */
+		tuptable->free = tuptable->alloced;
 		tuptable->alloced += tuptable->free;
 		tuptable->vals = (HeapTuple *) repalloc(tuptable->vals,
 									  tuptable->alloced * sizeof(HeapTuple));
@@ -2329,6 +2330,7 @@ _SPI_convert_params(int nargs, Oid *argtypes,
 		paramLI->parserSetup = NULL;
 		paramLI->parserSetupArg = NULL;
 		paramLI->numParams = nargs;
+		paramLI->paramMask = NULL;
 
 		for (i = 0; i < nargs; i++)
 		{

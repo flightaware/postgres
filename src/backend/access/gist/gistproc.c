@@ -7,7 +7,7 @@
  * This gives R-tree behavior, with Guttman's poly-time split algorithm.
  *
  *
- * Portions Copyright (c) 1996-2015, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2016, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  * IDENTIFICATION
@@ -588,7 +588,7 @@ gist_box_picksplit(PG_FUNCTION_ARGS)
 		 * We first consider splits where b is the lower bound of an entry.
 		 * We iterate through all entries, and for each b, calculate the
 		 * smallest possible a. Then we consider splits where a is the
-		 * uppper bound of an entry, and for each a, calculate the greatest
+		 * upper bound of an entry, and for each a, calculate the greatest
 		 * possible b.
 		 *
 		 * In the above example, the first loop would consider splits:
@@ -638,7 +638,7 @@ gist_box_picksplit(PG_FUNCTION_ARGS)
 		}
 
 		/*
-		 * Iterate over upper bound of left group finding greates possible
+		 * Iterate over upper bound of left group finding greatest possible
 		 * lower bound of right group.
 		 */
 		i1 = nentries - 1;
@@ -1489,12 +1489,10 @@ gist_point_distance(PG_FUNCTION_ARGS)
  * This is a lower bound estimate of distance from point to indexed geometric
  * type.
  */
-Datum
-gist_bbox_distance(PG_FUNCTION_ARGS)
+static double
+gist_bbox_distance(GISTENTRY *entry, Datum query,
+				   StrategyNumber strategy, bool *recheck)
 {
-	GISTENTRY  *entry = (GISTENTRY *) PG_GETARG_POINTER(0);
-	StrategyNumber strategy = (StrategyNumber) PG_GETARG_UINT16(2);
-	bool	   *recheck = (bool *) PG_GETARG_POINTER(4);
 	double		distance;
 	StrategyNumber strategyGroup = strategy / GeoStrategyNumberOffset;
 
@@ -1506,12 +1504,44 @@ gist_bbox_distance(PG_FUNCTION_ARGS)
 		case PointStrategyNumberGroup:
 			distance = computeDistance(false,
 									   DatumGetBoxP(entry->key),
-									   PG_GETARG_POINT_P(1));
+									   DatumGetPointP(query));
 			break;
 		default:
-			elog(ERROR, "unknown strategy number: %d", strategy);
+			elog(ERROR, "unrecognized strategy number: %d", strategy);
 			distance = 0.0;		/* keep compiler quiet */
 	}
+
+	return distance;
+}
+
+Datum
+gist_circle_distance(PG_FUNCTION_ARGS)
+{
+	GISTENTRY  *entry = (GISTENTRY *) PG_GETARG_POINTER(0);
+	Datum		query = PG_GETARG_DATUM(1);
+	StrategyNumber strategy = (StrategyNumber) PG_GETARG_UINT16(2);
+
+	/* Oid subtype = PG_GETARG_OID(3); */
+	bool	   *recheck = (bool *) PG_GETARG_POINTER(4);
+	double		distance;
+
+	distance = gist_bbox_distance(entry, query, strategy, recheck);
+
+	PG_RETURN_FLOAT8(distance);
+}
+
+Datum
+gist_poly_distance(PG_FUNCTION_ARGS)
+{
+	GISTENTRY  *entry = (GISTENTRY *) PG_GETARG_POINTER(0);
+	Datum		query = PG_GETARG_DATUM(1);
+	StrategyNumber strategy = (StrategyNumber) PG_GETARG_UINT16(2);
+
+	/* Oid subtype = PG_GETARG_OID(3); */
+	bool	   *recheck = (bool *) PG_GETARG_POINTER(4);
+	double		distance;
+
+	distance = gist_bbox_distance(entry, query, strategy, recheck);
 
 	PG_RETURN_FLOAT8(distance);
 }

@@ -3,7 +3,7 @@
  * parse_clause.c
  *	  handle clauses in parser
  *
- * Portions Copyright (c) 1996-2015, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2016, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  *
@@ -21,7 +21,8 @@
 #include "access/tsmapi.h"
 #include "catalog/catalog.h"
 #include "catalog/heap.h"
-#include "catalog/pg_constraint.h"
+#include "catalog/pg_am.h"
+#include "catalog/pg_constraint_fn.h"
 #include "catalog/pg_type.h"
 #include "commands/defrem.h"
 #include "nodes/makefuncs.h"
@@ -2856,7 +2857,7 @@ transformOnConflictArbiter(ParseState *pstate,
 		ereport(ERROR,
 				(errcode(ERRCODE_SYNTAX_ERROR),
 				 errmsg("ON CONFLICT DO UPDATE requires inference specification or constraint name"),
-				 errhint("For example, ON CONFLICT (<column>)."),
+				 errhint("For example, ON CONFLICT (column_name)."),
 				 parser_errposition(pstate,
 								  exprLocation((Node *) onConflictClause))));
 
@@ -2867,7 +2868,7 @@ transformOnConflictArbiter(ParseState *pstate,
 	if (IsCatalogRelation(pstate->p_target_relation))
 		ereport(ERROR,
 				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-			  errmsg("ON CONFLICT not supported with system catalog tables"),
+			  errmsg("ON CONFLICT is not supported with system catalog tables"),
 				 parser_errposition(pstate,
 								  exprLocation((Node *) onConflictClause))));
 
@@ -2875,7 +2876,7 @@ transformOnConflictArbiter(ParseState *pstate,
 	if (RelationIsUsedAsCatalogTable(pstate->p_target_relation))
 		ereport(ERROR,
 				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-				 errmsg("ON CONFLICT not supported on table \"%s\" used as a catalog table",
+				 errmsg("ON CONFLICT is not supported on table \"%s\" used as a catalog table",
 						RelationGetRelationName(pstate->p_target_relation)),
 				 parser_errposition(pstate,
 								  exprLocation((Node *) onConflictClause))));

@@ -158,12 +158,13 @@
 
 #bgwriter_delay = 200ms			# 10-10000ms between rounds
 #bgwriter_lru_maxpages = 100		# 0-1000 max buffers written/round
-#bgwriter_lru_multiplier = 2.0		# 0-10.0 multipler on buffers scanned/round
+#bgwriter_lru_multiplier = 2.0		# 0-10.0 multiplier on buffers scanned/round
 
 # - Asynchronous Behavior -
 
 #effective_io_concurrency = 1		# 1-1000; 0 disables prefetching
 #max_worker_processes = 8
+#max_parallel_degree = 0		# max number of worker processes per node
 
 
 #------------------------------------------------------------------------------
@@ -191,6 +192,7 @@
 #wal_buffers = -1			# min 32kB, -1 sets based on shared_buffers
 					# (change requires restart)
 #wal_writer_delay = 200ms		# 1-10000 milliseconds
+#wal_writer_flush_after = 1MB		# 0 disables
 
 #commit_delay = 0			# range 0-100000, in microseconds
 #commit_siblings = 5			# range 1-1000
@@ -290,6 +292,8 @@
 #cpu_tuple_cost = 0.01			# same scale as above
 #cpu_index_tuple_cost = 0.005		# same scale as above
 #cpu_operator_cost = 0.0025		# same scale as above
+#parallel_tuple_cost = 0.1		# same scale as above
+#parallel_setup_cost = 1000.0	# same scale as above
 #effective_cache_size = 4GB
 
 # - Genetic Query Optimizer -
@@ -310,6 +314,7 @@
 #from_collapse_limit = 8
 #join_collapse_limit = 8		# 1 disables collapsing of explicit
 					# JOIN clauses
+#force_parallel_mode = off
 
 
 #------------------------------------------------------------------------------
@@ -425,6 +430,7 @@
 					#   %p = process ID
 					#   %t = timestamp without milliseconds
 					#   %m = timestamp with milliseconds
+					#   %n = timestamp with milliseconds (as a Unix epoch)
 					#   %i = command tag
 					#   %e = SQL state
 					#   %c = session ID
@@ -443,8 +449,14 @@
 					# than the specified size in kilobytes;
 					# -1 disables, 0 logs all temp files
 #log_timezone = 'GMT'
+
+
+# - Process Title -
+
 #cluster_name = ''			# added to process titles if nonempty
 					# (change requires restart)
+#update_process_title = on
+
 
 #------------------------------------------------------------------------------
 # RUNTIME STATISTICS
@@ -457,7 +469,6 @@
 #track_io_timing = off
 #track_functions = none			# none, pl, all
 #track_activity_query_size = 1024	# (change requires restart)
-#update_process_title = on
 #stats_temp_directory = 'pg_stat_tmp'
 
 
@@ -525,6 +536,7 @@
 #bytea_output = 'hex'			# hex, escape
 #xmlbinary = 'base64'
 #xmloption = 'content'
+#gin_fuzzy_search_limit = 0
 #gin_pending_list_limit = 4MB
 
 # - Locale and Formatting -

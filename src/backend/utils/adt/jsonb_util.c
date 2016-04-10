@@ -3,7 +3,7 @@
  * jsonb_util.c
  *	  converting between Jsonb and JsonbValues, and iterating.
  *
- * Copyright (c) 2014-2015, PostgreSQL Global Development Group
+ * Copyright (c) 2014-2016, PostgreSQL Global Development Group
  *
  *
  * IDENTIFICATION
@@ -187,7 +187,7 @@ compareJsonbContainers(JsonbContainer *a, JsonbContainer *b)
 	{
 		JsonbValue	va,
 					vb;
-		int			ra,
+		JsonbIteratorToken ra,
 					rb;
 
 		ra = JsonbIteratorNext(&ita, &va, false);
@@ -961,10 +961,10 @@ freeAndGetParent(JsonbIterator *it)
 bool
 JsonbDeepContains(JsonbIterator **val, JsonbIterator **mContained)
 {
-	uint32		rval,
-				rcont;
 	JsonbValue	vval,
 				vcontained;
+	JsonbIteratorToken rval,
+				rcont;
 
 	/*
 	 * Guard against stack overflow due to overly complex Jsonb.

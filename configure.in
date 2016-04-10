@@ -23,7 +23,7 @@ m4_if(m4_defn([m4_PACKAGE_VERSION]), [2.69], [], [m4_fatal([Autoconf version 2.6
 Untested combinations of 'autoconf' and PostgreSQL versions are not
 recommended.  You can remove the check from 'configure.in' but it is then
 your responsibility whether the result works or not.])])
-AC_COPYRIGHT([Copyright (c) 1996-2015, PostgreSQL Global Development Group])
+AC_COPYRIGHT([Copyright (c) 1996-2016, PostgreSQL Global Development Group])
 AC_CONFIG_SRCDIR([src/backend/access/common/heaptuple.c])
 AC_CONFIG_AUX_DIR(config)
 AC_PREFIX_DEFAULT(/usr/local/pgsql)
@@ -700,6 +700,15 @@ AC_SUBST(with_selinux)
 AC_MSG_RESULT([$with_selinux])
 
 #
+# Systemd
+#
+AC_MSG_CHECKING([whether to build with systemd support])
+PGAC_ARG_BOOL(with, systemd, no, [build with systemd support],
+              [AC_DEFINE([USE_SYSTEMD], 1, [Define to build with systemd support. (--with-systemd)])])
+AC_SUBST(with_systemd)
+AC_MSG_RESULT([$with_systemd])
+
+#
 # Readline
 #
 PGAC_ARG_BOOL(with, readline, yes,
@@ -1249,6 +1258,10 @@ if test "$with_pam" = yes ; then
                                      [AC_MSG_ERROR([header file <security/pam_appl.h> or <pam/pam_appl.h> is required for PAM.])])])
 fi
 
+if test "$with_systemd" = yes ; then
+  AC_CHECK_HEADER(systemd/sd-daemon.h, [], [AC_MSG_ERROR([header file <systemd/sd-daemon.h> is required for systemd support])])
+fi
+
 if test "$with_libxml" = yes ; then
   AC_CHECK_HEADER(libxml/parser.h, [], [AC_MSG_ERROR([header file <libxml/parser.h> is required for XML support])])
 fi
@@ -1317,6 +1330,7 @@ PGAC_C_FUNCNAME_SUPPORT
 PGAC_C_STATIC_ASSERT
 PGAC_C_TYPES_COMPATIBLE
 PGAC_C_BUILTIN_BSWAP32
+PGAC_C_BUILTIN_BSWAP64
 PGAC_C_BUILTIN_CONSTANT_P
 PGAC_C_BUILTIN_UNREACHABLE
 PGAC_C_VA_ARGS
@@ -1406,7 +1420,7 @@ PGAC_FUNC_GETTIMEOFDAY_1ARG
 LIBS_including_readline="$LIBS"
 LIBS=`echo "$LIBS" | sed -e 's/-ledit//g' -e 's/-lreadline//g'`
 
-AC_CHECK_FUNCS([cbrt dlopen fdatasync getifaddrs getpeerucred getrlimit mbstowcs_l memmove poll pstat pthread_is_threaded_np readlink setproctitle setsid shm_open sigprocmask symlink sync_file_range towlower utime utimes wcstombs wcstombs_l])
+AC_CHECK_FUNCS([cbrt dlopen fdatasync getifaddrs getpeerucred getrlimit mbstowcs_l memmove poll pstat pthread_is_threaded_np readlink setproctitle setsid shm_open symlink sync_file_range towlower utime utimes wcstombs wcstombs_l])
 
 AC_REPLACE_FUNCS(fseeko)
 case $host_os in
@@ -1576,6 +1590,7 @@ if test "$PORTNAME" = "win32"; then
   AC_LIBOBJ(system)
   AC_LIBOBJ(win32env)
   AC_LIBOBJ(win32error)
+  AC_LIBOBJ(win32security)
   AC_LIBOBJ(win32setlocale)
   AC_DEFINE([HAVE_SYMLINK], 1,
             [Define to 1 if you have the `symlink' function.])
@@ -1594,18 +1609,6 @@ fi
 # Cygwin needs only a bit of that
 if test "$PORTNAME" = "cygwin"; then
   AC_LIBOBJ(dirmod)
-fi
-
-dnl Cannot use AC_CHECK_FUNC because sigsetjmp may be a macro
-dnl (especially on GNU libc)
-dnl See also comments in c.h.
-AC_CACHE_CHECK([for sigsetjmp], pgac_cv_func_sigsetjmp,
-[AC_LINK_IFELSE([AC_LANG_PROGRAM([#include <setjmp.h>],
-            [sigjmp_buf x; sigsetjmp(x, 1);])],
-            [pgac_cv_func_sigsetjmp=yes],
-            [pgac_cv_func_sigsetjmp=no])])
-if test x"$pgac_cv_func_sigsetjmp" = x"yes"; then
-  AC_DEFINE(HAVE_SIGSETJMP, 1, [Define to 1 if you have sigsetjmp().])
 fi
 
 AC_CHECK_DECLS([sys_siglist], [], [],
@@ -1646,7 +1649,7 @@ LIBS="$LIBS_including_readline"
 
 if test "$with_readline" = yes; then
   PGAC_VAR_RL_COMPLETION_APPEND_CHARACTER
-  AC_CHECK_FUNCS([rl_completion_matches rl_filename_completion_function])
+  AC_CHECK_FUNCS([rl_completion_matches rl_filename_completion_function rl_reset_screen_size])
   AC_CHECK_FUNCS([append_history history_truncate_file])
 fi
 
@@ -1831,10 +1834,6 @@ AC_DEFINE_UNQUOTED(MAXIMUM_ALIGNOF, $MAX_ALIGNOF, [Define as the maximum alignme
 AC_CHECK_TYPES([int8, uint8, int64, uint64], [], [],
 [#include <stdio.h>])
 
-# We also check for sig_atomic_t, which *should* be defined per ANSI
-# C, but is missing on some old platforms.
-AC_CHECK_TYPES(sig_atomic_t, [], [], [#include <signal.h>])
-
 # Check for extensions offering the integer scalar type __int128.
 PGAC_TYPE_128BIT_INT
 
@@ -1934,18 +1933,6 @@ else
   fi
 fi
 AC_SUBST(PG_CRC32C_OBJS)
-
-
-# Check that POSIX signals are available if thread safety is enabled.
-if test "$PORTNAME" != "win32"
-then
-PGAC_FUNC_POSIX_SIGNALS
-if test "$pgac_cv_func_posix_signals" != yes -a "$enable_thread_safety" = yes; then
-  AC_MSG_ERROR([
-Thread-safety requires POSIX signals, which are not supported by this
-operating system;  use --disable-thread-safety to disable thread safety.])
-fi
-fi
 
 
 # Select semaphore implementation type.

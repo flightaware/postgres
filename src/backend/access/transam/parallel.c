@@ -3,7 +3,7 @@
  * parallel.c
  *	  Infrastructure for launching parallel workers
  *
- * Portions Copyright (c) 1996-2014, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2016, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  * IDENTIFICATION
@@ -22,12 +22,14 @@
 #include "libpq/pqformat.h"
 #include "libpq/pqmq.h"
 #include "miscadmin.h"
+#include "optimizer/planmain.h"
 #include "storage/ipc.h"
 #include "storage/sinval.h"
 #include "storage/spin.h"
 #include "tcop/tcopprot.h"
 #include "utils/combocid.h"
 #include "utils/guc.h"
+#include "utils/inval.h"
 #include "utils/memutils.h"
 #include "utils/resowner.h"
 #include "utils/snapmgr.h"
@@ -76,10 +78,6 @@ typedef struct FixedParallelState
 	/* Mutex protects remaining fields. */
 	slock_t		mutex;
 
-	/* Track whether workers have attached. */
-	int			workers_expected;
-	int			workers_attached;
-
 	/* Maximum XactLastRecEnd of any worker. */
 	XLogRecPtr	last_xlog_end;
 } FixedParallelState;
@@ -95,6 +93,9 @@ int			ParallelWorkerNumber = -1;
 /* Is there a parallel message pending which we need to receive? */
 bool		ParallelMessagePending = false;
 
+/* Are we initializing a parallel worker? */
+bool		InitializingParallelWorker = false;
+
 /* Pointer to our fixed parallel state. */
 static FixedParallelState *MyFixedParallelState;
 
@@ -106,6 +107,7 @@ static void HandleParallelMessage(ParallelContext *, int, StringInfo msg);
 static void ParallelErrorContext(void *arg);
 static void ParallelExtensionTrampoline(dsm_segment *seg, shm_toc *toc);
 static void ParallelWorkerMain(Datum main_arg);
+static void WaitForParallelWorkersToExit(ParallelContext *pcxt);
 
 /*
  * Establish a new parallel context.  This should be done after entering
@@ -129,6 +131,14 @@ CreateParallelContext(parallel_worker_main_type entrypoint, int nworkers)
 	 * background workers.
 	 */
 	if (dynamic_shared_memory_type == DSM_IMPL_NONE)
+		nworkers = 0;
+
+	/*
+	 * If we are running under serializable isolation, we can't use
+	 * parallel workers, at least not until somebody enhances that mechanism
+	 * to be parallel-aware.
+	 */
+	if (IsolationIsSerializable())
 		nworkers = 0;
 
 	/* We might be running in a short-lived memory context. */
@@ -282,8 +292,6 @@ InitializeParallelDSM(ParallelContext *pcxt)
 	fps->parallel_master_backend_id = MyBackendId;
 	fps->entrypoint = pcxt->entrypoint;
 	SpinLockInit(&fps->mutex);
-	fps->workers_expected = pcxt->nworkers;
-	fps->workers_attached = 0;
 	fps->last_xlog_end = 0;
 	shm_toc_insert(pcxt->toc, PARALLEL_KEY_FIXED, fps);
 
@@ -372,6 +380,45 @@ InitializeParallelDSM(ParallelContext *pcxt)
 }
 
 /*
+ * Reinitialize the dynamic shared memory segment for a parallel context such
+ * that we could launch workers for it again.
+ */
+void
+ReinitializeParallelDSM(ParallelContext *pcxt)
+{
+	FixedParallelState *fps;
+	char	   *error_queue_space;
+	int			i;
+
+	if (pcxt->nworkers_launched == 0)
+		return;
+
+	WaitForParallelWorkersToFinish(pcxt);
+	WaitForParallelWorkersToExit(pcxt);
+
+	/* Reset a few bits of fixed parallel state to a clean state. */
+	fps = shm_toc_lookup(pcxt->toc, PARALLEL_KEY_FIXED);
+	fps->last_xlog_end = 0;
+
+	/* Recreate error queues. */
+	error_queue_space =
+		shm_toc_lookup(pcxt->toc, PARALLEL_KEY_ERROR_QUEUE);
+	for (i = 0; i < pcxt->nworkers; ++i)
+	{
+		char	   *start;
+		shm_mq	   *mq;
+
+		start = error_queue_space + i * PARALLEL_ERROR_QUEUE_SIZE;
+		mq = shm_mq_create(start, PARALLEL_ERROR_QUEUE_SIZE);
+		shm_mq_set_receiver(mq, MyProc);
+		pcxt->worker[i].error_mqh = shm_mq_attach(mq, pcxt->seg, NULL);
+	}
+
+	/* Reset number of workers launched. */
+	pcxt->nworkers_launched = 0;
+}
+
+/*
  * Launch parallel workers.
  */
 void
@@ -385,6 +432,9 @@ LaunchParallelWorkers(ParallelContext *pcxt)
 	/* Skip this if we have no workers. */
 	if (pcxt->nworkers == 0)
 		return;
+
+	/* We need to be a lock group leader. */
+	BecomeLockGroupLeader();
 
 	/* If we do have workers, we'd better have a DSM segment. */
 	Assert(pcxt->seg != NULL);
@@ -402,6 +452,7 @@ LaunchParallelWorkers(ParallelContext *pcxt)
 	worker.bgw_main = ParallelWorkerMain;
 	worker.bgw_main_arg = UInt32GetDatum(dsm_segment_handle(pcxt->seg));
 	worker.bgw_notify_pid = MyProcPid;
+	memset(&worker.bgw_extra, 0, BGW_EXTRALEN);
 
 	/*
 	 * Start workers.
@@ -413,11 +464,15 @@ LaunchParallelWorkers(ParallelContext *pcxt)
 	 */
 	for (i = 0; i < pcxt->nworkers; ++i)
 	{
+		memcpy(worker.bgw_extra, &i, sizeof(int));
 		if (!any_registrations_failed &&
 			RegisterDynamicBackgroundWorker(&worker,
 											&pcxt->worker[i].bgwhandle))
+		{
 			shm_mq_set_handle(pcxt->worker[i].error_mqh,
 							  pcxt->worker[i].bgwhandle);
+			pcxt->nworkers_launched++;
+		}
 		else
 		{
 			/*
@@ -440,7 +495,7 @@ LaunchParallelWorkers(ParallelContext *pcxt)
 }
 
 /*
- * Wait for all workers to exit.
+ * Wait for all workers to finish computing.
  *
  * Even if the parallel operation seems to have completed successfully, it's
  * important to call this function afterwards.  We must not miss any errors
@@ -492,6 +547,46 @@ WaitForParallelWorkersToFinish(ParallelContext *pcxt)
 }
 
 /*
+ * Wait for all workers to exit.
+ *
+ * This function ensures that workers have been completely shutdown.  The
+ * difference between WaitForParallelWorkersToFinish and this function is
+ * that former just ensures that last message sent by worker backend is
+ * received by master backend whereas this ensures the complete shutdown.
+ */
+static void
+WaitForParallelWorkersToExit(ParallelContext *pcxt)
+{
+	int			i;
+
+	/* Wait until the workers actually die. */
+	for (i = 0; i < pcxt->nworkers; ++i)
+	{
+		BgwHandleStatus status;
+
+		if (pcxt->worker == NULL || pcxt->worker[i].bgwhandle == NULL)
+			continue;
+
+		status = WaitForBackgroundWorkerShutdown(pcxt->worker[i].bgwhandle);
+
+		/*
+		 * If the postmaster kicked the bucket, we have no chance of cleaning
+		 * up safely -- we won't be able to tell when our workers are actually
+		 * dead.  This doesn't necessitate a PANIC since they will all abort
+		 * eventually, but we can't safely continue this session.
+		 */
+		if (status == BGWH_POSTMASTER_DIED)
+			ereport(FATAL,
+					(errcode(ERRCODE_ADMIN_SHUTDOWN),
+				 errmsg("postmaster exited during a parallel transaction")));
+
+		/* Release memory. */
+		pfree(pcxt->worker[i].bgwhandle);
+		pcxt->worker[i].bgwhandle = NULL;
+	}
+}
+
+/*
  * Destroy a parallel context.
  *
  * If expecting a clean exit, you should use WaitForParallelWorkersToFinish()
@@ -513,14 +608,17 @@ DestroyParallelContext(ParallelContext *pcxt)
 	dlist_delete(&pcxt->node);
 
 	/* Kill each worker in turn, and forget their error queues. */
-	for (i = 0; i < pcxt->nworkers; ++i)
+	if (pcxt->worker != NULL)
 	{
-		if (pcxt->worker[i].bgwhandle != NULL)
-			TerminateBackgroundWorker(pcxt->worker[i].bgwhandle);
-		if (pcxt->worker[i].error_mqh != NULL)
+		for (i = 0; i < pcxt->nworkers; ++i)
 		{
-			pfree(pcxt->worker[i].error_mqh);
-			pcxt->worker[i].error_mqh = NULL;
+			if (pcxt->worker[i].error_mqh != NULL)
+			{
+				TerminateBackgroundWorker(pcxt->worker[i].bgwhandle);
+
+				pfree(pcxt->worker[i].error_mqh);
+				pcxt->worker[i].error_mqh = NULL;
+			}
 		}
 	}
 
@@ -545,38 +643,14 @@ DestroyParallelContext(ParallelContext *pcxt)
 		pcxt->private_memory = NULL;
 	}
 
-	/* Wait until the workers actually die. */
-	for (i = 0; i < pcxt->nworkers; ++i)
-	{
-		BgwHandleStatus status;
-
-		if (pcxt->worker[i].bgwhandle == NULL)
-			continue;
-
-		/*
-		 * We can't finish transaction commit or abort until all of the
-		 * workers are dead.  This means, in particular, that we can't respond
-		 * to interrupts at this stage.
-		 */
-		HOLD_INTERRUPTS();
-		status = WaitForBackgroundWorkerShutdown(pcxt->worker[i].bgwhandle);
-		RESUME_INTERRUPTS();
-
-		/*
-		 * If the postmaster kicked the bucket, we have no chance of cleaning
-		 * up safely -- we won't be able to tell when our workers are actually
-		 * dead.  This doesn't necessitate a PANIC since they will all abort
-		 * eventually, but we can't safely continue this session.
-		 */
-		if (status == BGWH_POSTMASTER_DIED)
-			ereport(FATAL,
-					(errcode(ERRCODE_ADMIN_SHUTDOWN),
-				 errmsg("postmaster exited during a parallel transaction")));
-
-		/* Release memory. */
-		pfree(pcxt->worker[i].bgwhandle);
-		pcxt->worker[i].bgwhandle = NULL;
-	}
+	/*
+	 * We can't finish transaction commit or abort until all of the
+	 * workers have exited.  This means, in particular, that we can't respond
+	 * to interrupts at this stage.
+	 */
+	HOLD_INTERRUPTS();
+	WaitForParallelWorkersToExit(pcxt);
+	RESUME_INTERRUPTS();
 
 	/* Free the worker array itself. */
 	if (pcxt->worker != NULL)
@@ -711,7 +785,7 @@ HandleParallelMessage(ParallelContext *pcxt, int i, StringInfo msg)
 				errctx.previous = pcxt->error_context_stack;
 				error_context_stack = &errctx;
 
-				/* Parse ErrorReponse or NoticeResponse. */
+				/* Parse ErrorResponse or NoticeResponse. */
 				pq_parse_errornotice(msg, &edata);
 
 				/* Death of a worker isn't enough justification for suicide. */
@@ -735,9 +809,7 @@ HandleParallelMessage(ParallelContext *pcxt, int i, StringInfo msg)
 
 		case 'X':				/* Terminate, indicating clean exit */
 			{
-				pfree(pcxt->worker[i].bgwhandle);
 				pfree(pcxt->worker[i].error_mqh);
-				pcxt->worker[i].bgwhandle = NULL;
 				pcxt->worker[i].error_mqh = NULL;
 				break;
 			}
@@ -811,9 +883,16 @@ ParallelWorkerMain(Datum main_arg)
 	char	   *tstatespace;
 	StringInfoData msgbuf;
 
+	/* Set flag to indicate that we're initializing a parallel worker. */
+	InitializingParallelWorker = true;
+
 	/* Establish signal handlers. */
 	pqsignal(SIGTERM, die);
 	BackgroundWorkerUnblockSignals();
+
+	/* Determine and set our parallel worker number. */
+	Assert(ParallelWorkerNumber == -1);
+	memcpy(&ParallelWorkerNumber, MyBgworkerEntry->bgw_extra, sizeof(int));
 
 	/* Set up a memory context and resource owner. */
 	Assert(CurrentResourceOwner == NULL);
@@ -832,25 +911,16 @@ ParallelWorkerMain(Datum main_arg)
 	if (seg == NULL)
 		ereport(ERROR,
 				(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
-				 errmsg("unable to map dynamic shared memory segment")));
+				 errmsg("could not map dynamic shared memory segment")));
 	toc = shm_toc_attach(PARALLEL_MAGIC, dsm_segment_address(seg));
 	if (toc == NULL)
 		ereport(ERROR,
 				(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
-			   errmsg("bad magic number in dynamic shared memory segment")));
+			   errmsg("invalid magic number in dynamic shared memory segment")));
 
-	/* Determine and set our worker number. */
+	/* Look up fixed parallel state. */
 	fps = shm_toc_lookup(toc, PARALLEL_KEY_FIXED);
 	Assert(fps != NULL);
-	Assert(ParallelWorkerNumber == -1);
-	SpinLockAcquire(&fps->mutex);
-	if (fps->workers_attached < fps->workers_expected)
-		ParallelWorkerNumber = fps->workers_attached++;
-	SpinLockRelease(&fps->mutex);
-	if (ParallelWorkerNumber < 0)
-		ereport(ERROR,
-				(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
-				 errmsg("too many parallel workers already attached")));
 	MyFixedParallelState = fps;
 
 	/*
@@ -864,7 +934,7 @@ ParallelWorkerMain(Datum main_arg)
 					 ParallelWorkerNumber * PARALLEL_ERROR_QUEUE_SIZE);
 	shm_mq_set_sender(mq, MyProc);
 	mqh = shm_mq_attach(mq, seg, NULL);
-	pq_redirect_to_shm_mq(mq, mqh);
+	pq_redirect_to_shm_mq(seg, mqh);
 	pq_set_parallel_master(fps->parallel_master_pid,
 						   fps->parallel_master_backend_id);
 
@@ -884,6 +954,19 @@ ParallelWorkerMain(Datum main_arg)
 	 * Hooray! Primary initialization is complete.  Now, we need to set up our
 	 * backend-local state to match the original backend.
 	 */
+
+	/*
+	 * Join locking group.  We must do this before anything that could try
+	 * to acquire a heavyweight lock, because any heavyweight locks acquired
+	 * to this point could block either directly against the parallel group
+	 * leader or against some process which in turn waits for a lock that
+	 * conflicts with the parallel group leader, causing an undetected
+	 * deadlock.  (If we can't join the lock group, the leader has gone away,
+	 * so just exit quietly.)
+	 */
+	if (!BecomeLockGroupMember(fps->parallel_master_pgproc,
+							   fps->parallel_master_pid))
+		return;
 
 	/*
 	 * Load libraries that were loaded by original backend.  We want to do
@@ -925,6 +1008,12 @@ ParallelWorkerMain(Datum main_arg)
 	Assert(asnapspace != NULL);
 	PushActiveSnapshot(RestoreSnapshot(asnapspace));
 
+	/*
+	 * We've changed which tuples we can see, and must therefore invalidate
+	 * system caches.
+	 */
+	InvalidateSystemCaches();
+
 	/* Restore user ID and security context. */
 	SetUserIdAndSecContext(fps->current_user_id, fps->sec_context);
 
@@ -932,6 +1021,7 @@ ParallelWorkerMain(Datum main_arg)
 	 * We've initialized all of our state now; nothing should change
 	 * hereafter.
 	 */
+	InitializingParallelWorker = false;
 	EnterParallelMode();
 
 	/*
@@ -990,7 +1080,8 @@ ParallelExtensionTrampoline(dsm_segment *seg, shm_toc *toc)
 static void
 ParallelErrorContext(void *arg)
 {
-	errcontext("parallel worker, pid %d", *(int32 *) arg);
+	if (force_parallel_mode != FORCE_PARALLEL_REGRESS)
+		errcontext("parallel worker, PID %d", *(int32 *) arg);
 }
 
 /*

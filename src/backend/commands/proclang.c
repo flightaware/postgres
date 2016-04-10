@@ -3,7 +3,7 @@
  * proclang.c
  *	  PostgreSQL PROCEDURAL LANGUAGE support code.
  *
- * Portions Copyright (c) 1996-2015, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2016, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  * IDENTIFICATION
@@ -135,6 +135,7 @@ CreateProceduralLanguage(CreatePLangStmt *stmt)
 									  false,	/* isLeakProof */
 									  false,	/* isStrict */
 									  PROVOLATILE_VOLATILE,
+									  PROPARALLEL_UNSAFE,
 									  buildoidvector(funcargtypes, 0),
 									  PointerGetDatum(NULL),
 									  PointerGetDatum(NULL),
@@ -174,6 +175,7 @@ CreateProceduralLanguage(CreatePLangStmt *stmt)
 										  false,		/* isLeakProof */
 										  true, /* isStrict */
 										  PROVOLATILE_VOLATILE,
+										  PROPARALLEL_UNSAFE,
 										  buildoidvector(funcargtypes, 1),
 										  PointerGetDatum(NULL),
 										  PointerGetDatum(NULL),
@@ -216,6 +218,7 @@ CreateProceduralLanguage(CreatePLangStmt *stmt)
 										  false,		/* isLeakProof */
 										  true, /* isStrict */
 										  PROVOLATILE_VOLATILE,
+										  PROPARALLEL_UNSAFE,
 										  buildoidvector(funcargtypes, 1),
 										  PointerGetDatum(NULL),
 										  PointerGetDatum(NULL),

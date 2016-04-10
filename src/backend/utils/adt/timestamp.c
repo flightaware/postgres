@@ -3,7 +3,7 @@
  * timestamp.c
  *	  Functions for the built-in SQL types "timestamp" and "interval".
  *
- * Portions Copyright (c) 1996-2015, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2016, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  *
@@ -68,7 +68,6 @@ typedef struct
 
 
 static TimeOffset time2t(const int hour, const int min, const int sec, const fsec_t fsec);
-static void EncodeSpecialTimestamp(Timestamp dt, char *str);
 static Timestamp dt2local(Timestamp dt, int timezone);
 static void AdjustTimestampForTypmod(Timestamp *time, int32 typmod);
 static void AdjustIntervalForTypmod(Interval *interval, int32 typmod);
@@ -1500,7 +1499,7 @@ make_interval(PG_FUNCTION_ARGS)
 /* EncodeSpecialTimestamp()
  * Convert reserved timestamp data type to string.
  */
-static void
+void
 EncodeSpecialTimestamp(Timestamp dt, char *str)
 {
 	if (TIMESTAMP_IS_NOBEGIN(dt))
@@ -4312,6 +4311,83 @@ date2isoyearday(int year, int mon, int mday)
 	return date2j(year, mon, mday) - isoweek2j(date2isoyear(year, mon, mday), 1) + 1;
 }
 
+/*
+ * NonFiniteTimestampTzPart
+ *
+ *	Used by timestamp_part and timestamptz_part when extracting from infinite
+ *	timestamp[tz].  Returns +/-Infinity if that is the appropriate result,
+ *	otherwise returns zero (which should be taken as meaning to return NULL).
+ *
+ *	Errors thrown here for invalid units should exactly match those that
+ *	would be thrown in the calling functions, else there will be unexpected
+ *	discrepancies between finite- and infinite-input cases.
+ */
+static float8
+NonFiniteTimestampTzPart(int type, int unit, char *lowunits,
+						 bool isNegative, bool isTz)
+{
+	if ((type != UNITS) && (type != RESERV))
+	{
+		if (isTz)
+			ereport(ERROR,
+					(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+			   errmsg("timestamp with time zone units \"%s\" not recognized",
+					  lowunits)));
+		else
+			ereport(ERROR,
+					(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+					 errmsg("timestamp units \"%s\" not recognized",
+							lowunits)));
+	}
+
+	switch (unit)
+	{
+			/* Oscillating units */
+		case DTK_MICROSEC:
+		case DTK_MILLISEC:
+		case DTK_SECOND:
+		case DTK_MINUTE:
+		case DTK_HOUR:
+		case DTK_DAY:
+		case DTK_MONTH:
+		case DTK_QUARTER:
+		case DTK_WEEK:
+		case DTK_DOW:
+		case DTK_ISODOW:
+		case DTK_DOY:
+		case DTK_TZ:
+		case DTK_TZ_MINUTE:
+		case DTK_TZ_HOUR:
+			return 0.0;
+
+			/* Monotonically-increasing units */
+		case DTK_YEAR:
+		case DTK_DECADE:
+		case DTK_CENTURY:
+		case DTK_MILLENNIUM:
+		case DTK_JULIAN:
+		case DTK_ISOYEAR:
+		case DTK_EPOCH:
+			if (isNegative)
+				return -get_float8_infinity();
+			else
+				return get_float8_infinity();
+
+		default:
+			if (isTz)
+				ereport(ERROR,
+						(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+				errmsg("timestamp with time zone units \"%s\" not supported",
+					   lowunits)));
+			else
+				ereport(ERROR,
+						(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+						 errmsg("timestamp units \"%s\" not supported",
+								lowunits)));
+			return 0.0;			/* keep compiler quiet */
+	}
+}
+
 /* timestamp_part()
  * Extract specified field from timestamp.
  */
@@ -4328,12 +4404,6 @@ timestamp_part(PG_FUNCTION_ARGS)
 	struct pg_tm tt,
 			   *tm = &tt;
 
-	if (TIMESTAMP_NOT_FINITE(timestamp))
-	{
-		result = 0;
-		PG_RETURN_FLOAT8(result);
-	}
-
 	lowunits = downcase_truncate_identifier(VARDATA_ANY(units),
 											VARSIZE_ANY_EXHDR(units),
 											false);
@@ -4341,6 +4411,17 @@ timestamp_part(PG_FUNCTION_ARGS)
 	type = DecodeUnits(0, lowunits, &val);
 	if (type == UNKNOWN_FIELD)
 		type = DecodeSpecial(0, lowunits, &val);
+
+	if (TIMESTAMP_NOT_FINITE(timestamp))
+	{
+		result = NonFiniteTimestampTzPart(type, val, lowunits,
+										  TIMESTAMP_IS_NOBEGIN(timestamp),
+										  false);
+		if (result)
+			PG_RETURN_FLOAT8(result);
+		else
+			PG_RETURN_NULL();
+	}
 
 	if (type == UNITS)
 	{
@@ -4458,6 +4539,26 @@ timestamp_part(PG_FUNCTION_ARGS)
 				result = date2isoyear(tm->tm_year, tm->tm_mon, tm->tm_mday);
 				break;
 
+			case DTK_DOW:
+			case DTK_ISODOW:
+				if (timestamp2tm(timestamp, NULL, tm, &fsec, NULL, NULL) != 0)
+					ereport(ERROR,
+							(errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
+							 errmsg("timestamp out of range")));
+				result = j2day(date2j(tm->tm_year, tm->tm_mon, tm->tm_mday));
+				if (val == DTK_ISODOW && result == 0)
+					result = 7;
+				break;
+
+			case DTK_DOY:
+				if (timestamp2tm(timestamp, NULL, tm, &fsec, NULL, NULL) != 0)
+					ereport(ERROR,
+							(errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
+							 errmsg("timestamp out of range")));
+				result = (date2j(tm->tm_year, tm->tm_mon, tm->tm_mday)
+						  - date2j(tm->tm_year, 1, 1) + 1);
+				break;
+
 			case DTK_TZ:
 			case DTK_TZ_MINUTE:
 			case DTK_TZ_HOUR:
@@ -4479,26 +4580,6 @@ timestamp_part(PG_FUNCTION_ARGS)
 #else
 				result = timestamp - SetEpochTimestamp();
 #endif
-				break;
-
-			case DTK_DOW:
-			case DTK_ISODOW:
-				if (timestamp2tm(timestamp, NULL, tm, &fsec, NULL, NULL) != 0)
-					ereport(ERROR,
-							(errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
-							 errmsg("timestamp out of range")));
-				result = j2day(date2j(tm->tm_year, tm->tm_mon, tm->tm_mday));
-				if (val == DTK_ISODOW && result == 0)
-					result = 7;
-				break;
-
-			case DTK_DOY:
-				if (timestamp2tm(timestamp, NULL, tm, &fsec, NULL, NULL) != 0)
-					ereport(ERROR,
-							(errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
-							 errmsg("timestamp out of range")));
-				result = (date2j(tm->tm_year, tm->tm_mon, tm->tm_mday)
-						  - date2j(tm->tm_year, 1, 1) + 1);
 				break;
 
 			default:
@@ -4539,12 +4620,6 @@ timestamptz_part(PG_FUNCTION_ARGS)
 	struct pg_tm tt,
 			   *tm = &tt;
 
-	if (TIMESTAMP_NOT_FINITE(timestamp))
-	{
-		result = 0;
-		PG_RETURN_FLOAT8(result);
-	}
-
 	lowunits = downcase_truncate_identifier(VARDATA_ANY(units),
 											VARSIZE_ANY_EXHDR(units),
 											false);
@@ -4552,6 +4627,17 @@ timestamptz_part(PG_FUNCTION_ARGS)
 	type = DecodeUnits(0, lowunits, &val);
 	if (type == UNKNOWN_FIELD)
 		type = DecodeSpecial(0, lowunits, &val);
+
+	if (TIMESTAMP_NOT_FINITE(timestamp))
+	{
+		result = NonFiniteTimestampTzPart(type, val, lowunits,
+										  TIMESTAMP_IS_NOBEGIN(timestamp),
+										  true);
+		if (result)
+			PG_RETURN_FLOAT8(result);
+		else
+			PG_RETURN_NULL();
+	}
 
 	if (type == UNITS)
 	{
@@ -4672,6 +4758,26 @@ timestamptz_part(PG_FUNCTION_ARGS)
 				result = date2isoyear(tm->tm_year, tm->tm_mon, tm->tm_mday);
 				break;
 
+			case DTK_DOW:
+			case DTK_ISODOW:
+				if (timestamp2tm(timestamp, &tz, tm, &fsec, NULL, NULL) != 0)
+					ereport(ERROR,
+							(errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
+							 errmsg("timestamp out of range")));
+				result = j2day(date2j(tm->tm_year, tm->tm_mon, tm->tm_mday));
+				if (val == DTK_ISODOW && result == 0)
+					result = 7;
+				break;
+
+			case DTK_DOY:
+				if (timestamp2tm(timestamp, &tz, tm, &fsec, NULL, NULL) != 0)
+					ereport(ERROR,
+							(errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
+							 errmsg("timestamp out of range")));
+				result = (date2j(tm->tm_year, tm->tm_mon, tm->tm_mday)
+						  - date2j(tm->tm_year, 1, 1) + 1);
+				break;
+
 			default:
 				ereport(ERROR,
 						(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
@@ -4691,26 +4797,6 @@ timestamptz_part(PG_FUNCTION_ARGS)
 #else
 				result = timestamp - SetEpochTimestamp();
 #endif
-				break;
-
-			case DTK_DOW:
-			case DTK_ISODOW:
-				if (timestamp2tm(timestamp, &tz, tm, &fsec, NULL, NULL) != 0)
-					ereport(ERROR,
-							(errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
-							 errmsg("timestamp out of range")));
-				result = j2day(date2j(tm->tm_year, tm->tm_mon, tm->tm_mday));
-				if (val == DTK_ISODOW && result == 0)
-					result = 7;
-				break;
-
-			case DTK_DOY:
-				if (timestamp2tm(timestamp, &tz, tm, &fsec, NULL, NULL) != 0)
-					ereport(ERROR,
-							(errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
-							 errmsg("timestamp out of range")));
-				result = (date2j(tm->tm_year, tm->tm_mon, tm->tm_mday)
-						  - date2j(tm->tm_year, 1, 1) + 1);
 				break;
 
 			default:

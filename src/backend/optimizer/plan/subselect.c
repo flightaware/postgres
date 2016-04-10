@@ -3,7 +3,7 @@
  * subselect.c
  *	  Planning routines for subselects and parameters.
  *
- * Portions Copyright (c) 1996-2015, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2016, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  * IDENTIFICATION
@@ -2394,10 +2394,18 @@ finalize_plan(PlannerInfo *root, Plan *plan, Bitmapset *valid_params,
 			break;
 
 		case T_ForeignScan:
-			finalize_primnode((Node *) ((ForeignScan *) plan)->fdw_exprs,
-							  &context);
-			/* We assume fdw_scan_tlist cannot contain Params */
-			context.paramids = bms_add_members(context.paramids, scan_params);
+			{
+				ForeignScan *fscan = (ForeignScan *) plan;
+
+				finalize_primnode((Node *) fscan->fdw_exprs,
+								  &context);
+				finalize_primnode((Node *) fscan->fdw_recheck_quals,
+								  &context);
+
+				/* We assume fdw_scan_tlist cannot contain Params */
+				context.paramids = bms_add_members(context.paramids,
+												   scan_params);
+			}
 			break;
 
 		case T_CustomScan:
@@ -2584,6 +2592,7 @@ finalize_plan(PlannerInfo *root, Plan *plan, Bitmapset *valid_params,
 		case T_Material:
 		case T_Sort:
 		case T_Unique:
+		case T_Gather:
 		case T_SetOp:
 		case T_Group:
 			break;

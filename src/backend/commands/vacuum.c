@@ -9,7 +9,7 @@
  * in cluster.c.
  *
  *
- * Portions Copyright (c) 1996-2015, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2016, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  *
@@ -1137,11 +1137,11 @@ vac_truncate_clog(TransactionId frozenXID,
 		return;
 
 	/*
-	 * Truncate CLOG and CommitTs to the oldest computed value. Note we don't
-	 * truncate multixacts; that will be done by the next checkpoint.
+	 * Truncate CLOG, multixact and CommitTs to the oldest computed value.
 	 */
 	TruncateCLOG(frozenXID);
-	TruncateCommitTs(frozenXID, true);
+	TruncateCommitTs(frozenXID);
+	TruncateMultiXact(minMulti, minmulti_datoid);
 
 	/*
 	 * Update the wrap limit for GetNewTransactionId and creation of new
@@ -1151,7 +1151,7 @@ vac_truncate_clog(TransactionId frozenXID,
 	 */
 	SetTransactionIdLimit(frozenXID, oldestxid_datoid);
 	SetMultiXactIdLimit(minMulti, minmulti_datoid);
-	AdvanceOldestCommitTs(frozenXID);
+	AdvanceOldestCommitTsXid(frozenXID);
 }
 
 

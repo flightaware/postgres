@@ -3,7 +3,7 @@
  * proc.c
  *	  routines to manage per-process shared memory data structure
  *
- * Portions Copyright (c) 1996-2015, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2016, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  *
@@ -181,7 +181,7 @@ InitProcGlobal(void)
 	ProcGlobal->startupBufferPinWaitBufId = -1;
 	ProcGlobal->walwriterLatch = NULL;
 	ProcGlobal->checkpointerLatch = NULL;
-	pg_atomic_init_u32(&ProcGlobal->nextClearXidElem, INVALID_PGPROCNO);
+	pg_atomic_init_u32(&ProcGlobal->procArrayGroupFirst, INVALID_PGPROCNO);
 
 	/*
 	 * Create and initialize all the PGPROC structures we'll need.  There are
@@ -226,7 +226,7 @@ InitProcGlobal(void)
 		{
 			PGSemaphoreCreate(&(procs[i].sem));
 			InitSharedLatch(&(procs[i].procLatch));
-			procs[i].backendLock = LWLockAssign();
+			LWLockInitialize(&(procs[i].backendLock), LWTRANCHE_PROC);
 		}
 		procs[i].pgprocno = i;
 
@@ -263,6 +263,9 @@ InitProcGlobal(void)
 		/* Initialize myProcLocks[] shared memory queues. */
 		for (j = 0; j < NUM_LOCK_PARTITIONS; j++)
 			SHMQueueInit(&(procs[i].myProcLocks[j]));
+
+		/* Initialize lockGroupMembers list. */
+		dlist_init(&procs[i].lockGroupMembers);
 	}
 
 	/*
@@ -283,15 +286,13 @@ InitProcGlobal(void)
 void
 InitProcess(void)
 {
-	/* use volatile pointer to prevent code rearrangement */
-	volatile PROC_HDR *procglobal = ProcGlobal;
 	PGPROC * volatile * procgloballist;
 
 	/*
 	 * ProcGlobal should be set up already (if we are a backend, we inherit
 	 * this by fork() or EXEC_BACKEND mechanism from the postmaster).
 	 */
-	if (procglobal == NULL)
+	if (ProcGlobal == NULL)
 		elog(PANIC, "proc header uninitialized");
 
 	if (MyProc != NULL)
@@ -299,11 +300,11 @@ InitProcess(void)
 
 	/* Decide which list should supply our PGPROC. */
 	if (IsAnyAutoVacuumProcess())
-		procgloballist = &procglobal->autovacFreeProcs;
+		procgloballist = &ProcGlobal->autovacFreeProcs;
 	else if (IsBackgroundWorker)
-		procgloballist = &procglobal->bgworkerFreeProcs;
+		procgloballist = &ProcGlobal->bgworkerFreeProcs;
 	else
-		procgloballist = &procglobal->freeProcs;
+		procgloballist = &ProcGlobal->freeProcs;
 
 	/*
 	 * Try to get a proc struct from the appropriate free list.  If this
@@ -314,7 +315,7 @@ InitProcess(void)
 	 */
 	SpinLockAcquire(ProcStructLock);
 
-	set_spins_per_delay(procglobal->spins_per_delay);
+	set_spins_per_delay(ProcGlobal->spins_per_delay);
 
 	MyProc = *procgloballist;
 
@@ -395,8 +396,13 @@ InitProcess(void)
 	SHMQueueElemInit(&(MyProc->syncRepLinks));
 
 	/* Initialize fields for group XID clearing. */
-	MyProc->backendLatestXid = InvalidTransactionId;
-	pg_atomic_init_u32(&MyProc->nextClearXidElem, INVALID_PGPROCNO);
+	MyProc->procArrayGroupMember = false;
+	MyProc->procArrayGroupMemberXid = InvalidTransactionId;
+	pg_atomic_init_u32(&MyProc->procArrayGroupNext, INVALID_PGPROCNO);
+
+	/* Check that group locking fields are in a proper initial state. */
+	Assert(MyProc->lockGroupLeader == NULL);
+	Assert(dlist_is_empty(&MyProc->lockGroupMembers));
 
 	/*
 	 * Acquire ownership of the PGPROC's latch, so that we can use WaitLatch
@@ -557,6 +563,10 @@ InitAuxiliaryProcess(void)
 	OwnLatch(&MyProc->procLatch);
 	SwitchToSharedLatch();
 
+	/* Check that group locking fields are in a proper initial state. */
+	Assert(MyProc->lockGroupLeader == NULL);
+	Assert(dlist_is_empty(&MyProc->lockGroupMembers));
+
 	/*
 	 * We might be reusing a semaphore that belonged to a failed process. So
 	 * be careful and reinitialize its value here.  (This is not strictly
@@ -577,13 +587,10 @@ InitAuxiliaryProcess(void)
 void
 PublishStartupProcessInformation(void)
 {
-	/* use volatile pointer to prevent code rearrangement */
-	volatile PROC_HDR *procglobal = ProcGlobal;
-
 	SpinLockAcquire(ProcStructLock);
 
-	procglobal->startupProc = MyProc;
-	procglobal->startupProcPid = MyProcPid;
+	ProcGlobal->startupProc = MyProc;
+	ProcGlobal->startupProcPid = MyProcPid;
 
 	SpinLockRelease(ProcStructLock);
 }
@@ -626,12 +633,9 @@ HaveNFreeProcs(int n)
 {
 	PGPROC	   *proc;
 
-	/* use volatile pointer to prevent code rearrangement */
-	volatile PROC_HDR *procglobal = ProcGlobal;
-
 	SpinLockAcquire(ProcStructLock);
 
-	proc = procglobal->freeProcs;
+	proc = ProcGlobal->freeProcs;
 
 	while (n > 0 && proc != NULL)
 	{
@@ -771,8 +775,6 @@ RemoveProcFromArray(int code, Datum arg)
 static void
 ProcKill(int code, Datum arg)
 {
-	/* use volatile pointer to prevent code rearrangement */
-	volatile PROC_HDR *procglobal = ProcGlobal;
 	PGPROC	   *proc;
 	PGPROC * volatile * procgloballist;
 
@@ -803,6 +805,39 @@ ProcKill(int code, Datum arg)
 		ReplicationSlotRelease();
 
 	/*
+	 * Detach from any lock group of which we are a member.  If the leader
+	 * exist before all other group members, it's PGPROC will remain allocated
+	 * until the last group process exits; that process must return the
+	 * leader's PGPROC to the appropriate list.
+	 */
+	if (MyProc->lockGroupLeader != NULL)
+	{
+		PGPROC	   *leader = MyProc->lockGroupLeader;
+		LWLock	   *leader_lwlock = LockHashPartitionLockByProc(leader);
+
+		LWLockAcquire(leader_lwlock, LW_EXCLUSIVE);
+		Assert(!dlist_is_empty(&leader->lockGroupMembers));
+		dlist_delete(&MyProc->lockGroupLink);
+		if (dlist_is_empty(&leader->lockGroupMembers))
+		{
+			leader->lockGroupLeader = NULL;
+			if (leader != MyProc)
+			{
+				procgloballist = leader->procgloballist;
+
+				/* Leader exited first; return its PGPROC. */
+				SpinLockAcquire(ProcStructLock);
+				leader->links.next = (SHM_QUEUE *) *procgloballist;
+				*procgloballist = leader;
+				SpinLockRelease(ProcStructLock);
+			}
+		}
+		else if (leader != MyProc)
+			MyProc->lockGroupLeader = NULL;
+		LWLockRelease(leader_lwlock);
+	}
+
+	/*
 	 * Reset MyLatch to the process local one.  This is so that signal
 	 * handlers et al can continue using the latch after the shared latch
 	 * isn't ours anymore. After that clear MyProc and disown the shared
@@ -816,12 +851,23 @@ ProcKill(int code, Datum arg)
 	procgloballist = proc->procgloballist;
 	SpinLockAcquire(ProcStructLock);
 
-	/* Return PGPROC structure (and semaphore) to appropriate freelist */
-	proc->links.next = (SHM_QUEUE *) *procgloballist;
-	*procgloballist = proc;
+	/*
+	 * If we're still a member of a locking group, that means we're a leader
+	 * which has somehow exited before its children.  The last remaining child
+	 * will release our PGPROC.  Otherwise, release it now.
+	 */
+	if (proc->lockGroupLeader == NULL)
+	{
+		/* Since lockGroupLeader is NULL, lockGroupMembers should be empty. */
+		Assert(dlist_is_empty(&proc->lockGroupMembers));
+
+		/* Return PGPROC structure (and semaphore) to appropriate freelist */
+		proc->links.next = (SHM_QUEUE *) *procgloballist;
+		*procgloballist = proc;
+	}
 
 	/* Update shared estimate of spins_per_delay */
-	procglobal->spins_per_delay = update_spins_per_delay(procglobal->spins_per_delay);
+	ProcGlobal->spins_per_delay = update_spins_per_delay(ProcGlobal->spins_per_delay);
 
 	SpinLockRelease(ProcStructLock);
 
@@ -951,7 +997,29 @@ ProcSleep(LOCALLOCK *locallock, LockMethod lockMethodTable)
 	bool		allow_autovacuum_cancel = true;
 	int			myWaitStatus;
 	PGPROC	   *proc;
+	PGPROC	   *leader = MyProc->lockGroupLeader;
 	int			i;
+
+	/*
+	 * If group locking is in use, locks held by members of my locking group
+	 * need to be included in myHeldLocks.
+	 */
+	if (leader != NULL)
+	{
+		SHM_QUEUE  *procLocks = &(lock->procLocks);
+		PROCLOCK   *otherproclock;
+
+		otherproclock = (PROCLOCK *)
+			SHMQueueNext(procLocks, procLocks, offsetof(PROCLOCK, lockLink));
+		while (otherproclock != NULL)
+		{
+			if (otherproclock->groupLeader == leader)
+				myHeldLocks |= otherproclock->holdMask;
+			otherproclock = (PROCLOCK *)
+				SHMQueueNext(procLocks, &otherproclock->lockLink,
+							 offsetof(PROCLOCK, lockLink));
+		}
+	}
 
 	/*
 	 * Determine where to add myself in the wait queue.
@@ -977,6 +1045,16 @@ ProcSleep(LOCALLOCK *locallock, LockMethod lockMethodTable)
 		proc = (PGPROC *) waitQueue->links.next;
 		for (i = 0; i < waitQueue->size; i++)
 		{
+			/*
+			 * If we're part of the same locking group as this waiter, its
+			 * locks neither conflict with ours nor contribute to
+			 * aheadRequests.
+			 */
+			if (leader != NULL && leader == proc->lockGroupLeader)
+			{
+				proc = (PGPROC *) proc->links.next;
+				continue;
+			}
 			/* Must he wait for me? */
 			if (lockMethodTable->conflictTab[proc->waitLockMode] & myHeldLocks)
 			{
@@ -1643,9 +1721,6 @@ ProcSendSignal(int pid)
 
 	if (RecoveryInProgress())
 	{
-		/* use volatile pointer to prevent code rearrangement */
-		volatile PROC_HDR *procglobal = ProcGlobal;
-
 		SpinLockAcquire(ProcStructLock);
 
 		/*
@@ -1656,8 +1731,8 @@ ProcSendSignal(int pid)
 		 * backend, so BackendPidGetProc() will not return any pid at all. So
 		 * we remember the information for this special case.
 		 */
-		if (pid == procglobal->startupProcPid)
-			proc = procglobal->startupProc;
+		if (pid == ProcGlobal->startupProcPid)
+			proc = ProcGlobal->startupProc;
 
 		SpinLockRelease(ProcStructLock);
 	}
@@ -1669,4 +1744,78 @@ ProcSendSignal(int pid)
 	{
 		SetLatch(&proc->procLatch);
 	}
+}
+
+/*
+ * BecomeLockGroupLeader - designate process as lock group leader
+ *
+ * Once this function has returned, other processes can join the lock group
+ * by calling BecomeLockGroupMember.
+ */
+void
+BecomeLockGroupLeader(void)
+{
+	LWLock	   *leader_lwlock;
+
+	/* If we already did it, we don't need to do it again. */
+	if (MyProc->lockGroupLeader == MyProc)
+		return;
+
+	/* We had better not be a follower. */
+	Assert(MyProc->lockGroupLeader == NULL);
+
+	/* Create single-member group, containing only ourselves. */
+	leader_lwlock = LockHashPartitionLockByProc(MyProc);
+	LWLockAcquire(leader_lwlock, LW_EXCLUSIVE);
+	MyProc->lockGroupLeader = MyProc;
+	dlist_push_head(&MyProc->lockGroupMembers, &MyProc->lockGroupLink);
+	LWLockRelease(leader_lwlock);
+}
+
+/*
+ * BecomeLockGroupMember - designate process as lock group member
+ *
+ * This is pretty straightforward except for the possibility that the leader
+ * whose group we're trying to join might exit before we manage to do so;
+ * and the PGPROC might get recycled for an unrelated process.  To avoid
+ * that, we require the caller to pass the PID of the intended PGPROC as
+ * an interlock.  Returns true if we successfully join the intended lock
+ * group, and false if not.
+ */
+bool
+BecomeLockGroupMember(PGPROC *leader, int pid)
+{
+	LWLock	   *leader_lwlock;
+	bool		ok = false;
+
+	/* Group leader can't become member of group */
+	Assert(MyProc != leader);
+
+	/* Can't already be a member of a group */
+	Assert(MyProc->lockGroupLeader == NULL);
+
+	/* PID must be valid. */
+	Assert(pid != 0);
+
+	/*
+	 * Get lock protecting the group fields.  Note LockHashPartitionLockByProc
+	 * accesses leader->pgprocno in a PGPROC that might be free.  This is safe
+	 * because all PGPROCs' pgprocno fields are set during shared memory
+	 * initialization and never change thereafter; so we will acquire the
+	 * correct lock even if the leader PGPROC is in process of being recycled.
+	 */
+	leader_lwlock = LockHashPartitionLockByProc(leader);
+	LWLockAcquire(leader_lwlock, LW_EXCLUSIVE);
+
+	/* Is this the leader we're looking for? */
+	if (leader->pid == pid && leader->lockGroupLeader == leader)
+	{
+		/* OK, join the group */
+		ok = true;
+		MyProc->lockGroupLeader = leader;
+		dlist_push_tail(&leader->lockGroupMembers, &MyProc->lockGroupLink);
+	}
+	LWLockRelease(leader_lwlock);
+
+	return ok;
 }
