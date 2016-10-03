@@ -236,12 +236,12 @@ static void pltcl_init_interp(pltcl_interp_desc *interp_desc, bool pltrusted);
 static pltcl_interp_desc *pltcl_fetch_interp(bool pltrusted);
 static void pltcl_init_load_unknown(Tcl_Interp *interp);
 
-static Datum pltcl_handler(FunctionCallInfo fcinfo, bool pltrusted);
+static Datum pltcl_handler(PG_FUNCTION_ARGS, bool pltrusted);
 
-static Datum pltcl_func_handler(FunctionCallInfo fcinfo, bool pltrusted);
+static Datum pltcl_func_handler(PG_FUNCTION_ARGS, bool pltrusted);
 
-static HeapTuple pltcl_trigger_handler(FunctionCallInfo fcinfo, bool pltrusted);
-static void pltcl_event_trigger_handler(FunctionCallInfo fcinfo, bool pltrusted);
+static HeapTuple pltcl_trigger_handler(PG_FUNCTION_ARGS, bool pltrusted);
+static void pltcl_event_trigger_handler(PG_FUNCTION_ARGS, bool pltrusted);
 
 static void throw_tcl_error(Tcl_Interp *interp, const char *proname);
 
@@ -710,7 +710,7 @@ pltclu_call_handler(PG_FUNCTION_ARGS)
  *						  both trusted and untrusted interpreters.
  **********************************************************************/
 static Datum
-pltcl_handler(FunctionCallInfo fcinfo, bool pltrusted)
+pltcl_handler(PG_FUNCTION_ARGS, bool pltrusted)
 {
 	Datum		retval;
 	FunctionCallInfo save_fcinfo;
@@ -795,7 +795,7 @@ pltcl_handler(FunctionCallInfo fcinfo, bool pltrusted)
  * pltcl_func_handler()		- Handler for regular function calls
  **********************************************************************/
 static Datum
-pltcl_func_handler(FunctionCallInfo fcinfo, bool pltrusted)
+pltcl_func_handler(PG_FUNCTION_ARGS, bool pltrusted)
 {
 	pltcl_proc_desc *prodesc;
 	Tcl_Interp *volatile interp;
