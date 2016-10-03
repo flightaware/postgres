@@ -249,8 +249,8 @@ static pltcl_proc_desc *compile_pltcl_function(Oid fn_oid, Oid tgreloid,
 					   bool is_event_trigger,
 					   bool pltrusted);
 
-static void
-			pltcl_pg_returnnext(Tcl_Interp *interp, int rowObjc, Tcl_Obj ** rowObjv);
+static void pltcl_pg_returnnext(Tcl_Interp *interp, int rowObjc,
+								Tcl_Obj **rowObjv);
 
 static int pltcl_elog(ClientData cdata, Tcl_Interp *interp,
 		   int objc, Tcl_Obj *const objv[]);
@@ -262,6 +262,8 @@ static int pltcl_argisnull(ClientData cdata, Tcl_Interp *interp,
 				int objc, Tcl_Obj *const objv[]);
 static int pltcl_returnnull(ClientData cdata, Tcl_Interp *interp,
 				 int objc, Tcl_Obj *const objv[]);
+static int pltcl_returnnext(ClientData cdata, Tcl_Interp *interp,
+				 int objc, Tcl_Obj * const objv[]);
 
 static int pltcl_SPI_execute(ClientData cdata, Tcl_Interp *interp,
 				  int objc, Tcl_Obj *const objv[]);
@@ -507,12 +509,8 @@ pltcl_init_interp(pltcl_interp_desc *interp_desc, bool pltrusted)
 						 pltcl_argisnull, NULL, NULL);
 	Tcl_CreateObjCommand(interp, "return_null",
 						 pltcl_returnnull, NULL, NULL);
-<<<<<<< HEAD
 	Tcl_CreateObjCommand(interp, "return_next",
 						 pltcl_returnnext, NULL, NULL);
-=======
->>>>>>> master
-
 	Tcl_CreateObjCommand(interp, "spi_exec",
 						 pltcl_SPI_execute, NULL, NULL);
 	Tcl_CreateObjCommand(interp, "spi_prepare",
@@ -919,12 +917,6 @@ pltcl_func_handler(PG_FUNCTION_ARGS, bool pltrusted)
 	 ************************************************************/
 	if (tcl_rc != TCL_OK)
 		throw_tcl_error(interp, prodesc->user_proname);
-
-	/*
-	 * Don't get rid of tcl_cmd until after throwing the error because with
-	 * tcl objects it can be referenced from the error handler
-	 */
-	Tcl_DecrRefCount(tcl_cmd);
 
 	/************************************************************
 	 * Disconnect from SPI manager and then create the return
@@ -1894,6 +1886,8 @@ pltcl_elog(ClientData cdata, Tcl_Interp *interp,
 							TCL_EXACT, &priIndex) != TCL_OK)
 		return TCL_ERROR;
 
+	level = loglevels[priIndex];
+
 	if (level == ERROR)
 	{
 		/*
@@ -1920,7 +1914,7 @@ pltcl_elog(ClientData cdata, Tcl_Interp *interp,
 		UTF_BEGIN;
 		ereport(level,
 				(errcode(ERRCODE_EXTERNAL_ROUTINE_EXCEPTION),
-				(errcode(ERRCODE_EXTERNAL_ROUTINE_EXCEPTION),
+				 errmsg("%s", UTF_U2E(Tcl_GetString(objv[2])))));
 		UTF_END;
 	}
 	PG_CATCH();
@@ -2442,9 +2436,6 @@ pltcl_SPI_execute(ClientData cdata, Tcl_Interp *interp,
 {
 	int			my_rc;
 	int			spi_rc;
-{
-	int			my_rc;
-	int			spi_rc;
 	int			query_idx;
 	int			i;
 	int			optIndex;
@@ -2454,23 +2445,22 @@ pltcl_SPI_execute(ClientData cdata, Tcl_Interp *interp,
 	MemoryContext oldcontext = CurrentMemoryContext;
 	ResourceOwner oldowner = CurrentResourceOwner;
 
-	MemoryContext oldcontext = CurrentMemoryContext;
-	ResourceOwner oldowner = CurrentResourceOwner;
-
 	enum options
 	{
 		OPT_ARRAY, OPT_COUNT
 	};
 
+	static const char *options[] = {
+		"-array", "-count", (const char *) NULL
+	};
+
 	/************************************************************
 	 * Check the call syntax and get the options
 	 ************************************************************/
-
+	if (objc < 2)
 	{
 		Tcl_WrongNumArgs(interp, 1, objv,
 						 "?-count n? ?-array name? query ?loop body?");
-		return TCL_ERROR;
-	}
 		return TCL_ERROR;
 	}
 
@@ -2481,14 +2471,12 @@ pltcl_SPI_execute(ClientData cdata, Tcl_Interp *interp,
 								TCL_EXACT, &optIndex) != TCL_OK)
 			break;
 
-
-
-		{
+		if (++i >= objc)
 		{
 			Tcl_SetObjResult(interp,
 			   Tcl_NewStringObj("missing argument to -count or -array", -1));
+			return TCL_ERROR;
 		}
-
 
 		switch ((enum options) optIndex)
 		{
@@ -2506,15 +2494,6 @@ pltcl_SPI_execute(ClientData cdata, Tcl_Interp *interp,
 	query_idx = i;
 	if (query_idx >= objc || query_idx + 2 < objc)
 	{
-	}
-
-	query_idx = i;
-	query_idx = i;
-	{
-		Tcl_WrongNumArgs(interp, query_idx - 1, objv, "query ?loop body?");
-		return TCL_ERROR;
-	}
-
 		Tcl_WrongNumArgs(interp, query_idx - 1, objv, "query ?loop body?");
 		return TCL_ERROR;
 	}
@@ -2564,9 +2543,6 @@ static int
 pltcl_process_SPI_result(Tcl_Interp *interp,
 						 const char *arrayname,
 						 Tcl_Obj *loop_body,
-						 int spi_rc,
-						 SPITupleTable *tuptable,
-						 uint64 ntuples)
 						 int spi_rc,
 						 SPITupleTable *tuptable,
 						 uint64 ntuples)
@@ -2652,9 +2628,6 @@ pltcl_process_SPI_result(Tcl_Interp *interp,
 			}
 			break;
 
-			}
-			break;
-
 		default:
 			Tcl_AppendResult(interp, "pltcl: SPI_execute failed: ",
 							 SPI_result_code_string(spi_rc), NULL);
@@ -2679,9 +2652,6 @@ pltcl_process_SPI_result(Tcl_Interp *interp,
 static int
 pltcl_SPI_prepare(ClientData cdata, Tcl_Interp *interp,
 				  int objc, Tcl_Obj *const objv[])
-{
-	volatile MemoryContext plan_cxt = NULL;
-	int			nargs;
 {
 	volatile MemoryContext plan_cxt = NULL;
 	int			nargs;
@@ -2766,8 +2736,6 @@ pltcl_SPI_prepare(ClientData cdata, Tcl_Interp *interp,
 								  nargs, qdesc->argtypes);
 		UTF_END;
 
-		UTF_END;
-
 		if (qdesc->plan == NULL)
 			elog(ERROR, "SPI_prepare() failed");
 
@@ -2814,9 +2782,6 @@ pltcl_SPI_execute_plan(ClientData cdata, Tcl_Interp *interp,
 {
 	int			my_rc;
 	int			spi_rc;
-{
-	int			my_rc;
-	int			spi_rc;
 	int			i;
 	int			j;
 	int			optIndex;
@@ -2838,11 +2803,15 @@ pltcl_SPI_execute_plan(ClientData cdata, Tcl_Interp *interp,
 		OPT_ARRAY, OPT_COUNT, OPT_NULLS
 	};
 
+	static const char *options[] = {
+		"-array", "-count", "-nulls", (const char *) NULL
+	};
+
 	/************************************************************
 	 * Get the options and check syntax
 	 ************************************************************/
 	i = 1;
-	/************************************************************
+	while (i < objc)
 	{
 		if (Tcl_GetIndexFromObj(interp, objv[i], options, "option",
 								TCL_EXACT, &optIndex) != TCL_OK)
@@ -3164,16 +3133,8 @@ pltcl_build_tuple_argument(HeapTuple tuple, TupleDesc tupdesc)
 									 Tcl_NewStringObj(UTF_E2U(attname), -1));
 			UTF_END;
 			UTF_BEGIN;
-			Tcl_ListObjAppendElement(NULL, retobj, Tcl_NewStringObj(UTF_E2U(outputstr), -1));
-=======
-			UTF_BEGIN;
-			Tcl_ListObjAppendElement(NULL, retobj,
-									 Tcl_NewStringObj(UTF_E2U(attname), -1));
-			UTF_END;
-			UTF_BEGIN;
 			Tcl_ListObjAppendElement(NULL, retobj,
 								   Tcl_NewStringObj(UTF_E2U(outputstr), -1));
->>>>>>> master
 			UTF_END;
 			pfree(outputstr);
 		}
