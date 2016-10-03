@@ -26,6 +26,7 @@
 
 #include "libpq-fe.h"
 #include "access/xlog_internal.h"
+#include "common/file_utils.h"
 
 
 /* fd and filename for currently open WAL file */
@@ -40,8 +41,8 @@ static PGresult *HandleCopyStream(PGconn *conn, StreamCtl *stream,
 				 XLogRecPtr *stoppos);
 static int	CopyStreamPoll(PGconn *conn, long timeout_ms);
 static int	CopyStreamReceive(PGconn *conn, long timeout, char **buffer);
-static bool ProcessKeepaliveMsg(PGconn *conn, char *copybuf, int len,
-					XLogRecPtr blockpos, int64 *last_status);
+static bool ProcessKeepaliveMsg(PGconn *conn, StreamCtl *stream, char *copybuf,
+					int len, XLogRecPtr blockpos, int64 *last_status);
 static bool ProcessXLogDataMsg(PGconn *conn, StreamCtl *stream, char *copybuf, int len,
 				   XLogRecPtr *blockpos);
 static PGresult *HandleEndOfCopyStream(PGconn *conn, StreamCtl *stream, char *copybuf,
@@ -55,7 +56,7 @@ static bool ReadEndOfStreamingResult(PGresult *res, XLogRecPtr *startpos,
 						 uint32 *timeline);
 
 static bool
-mark_file_as_archived(const char *basedir, const char *fname)
+mark_file_as_archived(const char *basedir, const char *fname, bool do_sync)
 {
 	int			fd;
 	static char tmppath[MAXPGPATH];
@@ -71,17 +72,13 @@ mark_file_as_archived(const char *basedir, const char *fname)
 		return false;
 	}
 
-	if (fsync(fd) != 0)
-	{
-		fprintf(stderr, _("%s: could not fsync file \"%s\": %s\n"),
-				progname, tmppath, strerror(errno));
-
-		close(fd);
-
-		return false;
-	}
-
 	close(fd);
+
+	if (do_sync && fsync_fname(tmppath, false, progname) != 0)
+		return false;
+
+	if (do_sync && fsync_parent_path(tmppath, progname) != 0)
+		return false;
 
 	return true;
 }
@@ -89,8 +86,11 @@ mark_file_as_archived(const char *basedir, const char *fname)
 /*
  * Open a new WAL file in the specified directory.
  *
- * The file will be padded to 16Mb with zeroes. The base filename (without
- * partial_suffix) is stored in current_walfile_name.
+ * Returns true if OK; on failure, returns false after printing an error msg.
+ * On success, 'walfile' is set to the FD for the file, and the base filename
+ * (without partial_suffix) is stored in 'current_walfile_name'.
+ *
+ * The file will be padded to 16Mb with zeroes.
  */
 static bool
 open_walfile(StreamCtl *stream, XLogRecPtr startpoint)
@@ -130,6 +130,21 @@ open_walfile(StreamCtl *stream, XLogRecPtr startpoint)
 	}
 	if (statbuf.st_size == XLogSegSize)
 	{
+		/*
+		 * fsync, in case of a previous crash between padding and fsyncing the
+		 * file.
+		 */
+		if (stream->do_sync)
+		{
+			if (fsync_fname(fn, false, progname) != 0 ||
+				fsync_parent_path(fn, progname) != 0)
+			{
+				/* error already printed */
+				close(f);
+				return false;
+			}
+		}
+
 		/* File is open and ready to use */
 		walfile = f;
 		return true;
@@ -143,12 +158,20 @@ open_walfile(StreamCtl *stream, XLogRecPtr startpoint)
 		return false;
 	}
 
-	/* New, empty, file. So pad it to 16Mb with zeroes */
+	/*
+	 * New, empty, file. So pad it to 16Mb with zeroes.  If we fail partway
+	 * through padding, we should attempt to unlink the file on failure, so as
+	 * not to leave behind a partially-filled file.
+	 */
 	zerobuf = pg_malloc0(XLOG_BLCKSZ);
 	for (bytes = 0; bytes < XLogSegSize; bytes += XLOG_BLCKSZ)
 	{
+		errno = 0;
 		if (write(f, zerobuf, XLOG_BLCKSZ) != XLOG_BLCKSZ)
 		{
+			/* if write didn't set errno, assume problem is no disk space */
+			if (errno == 0)
+				errno = ENOSPC;
 			fprintf(stderr,
 					_("%s: could not pad transaction log file \"%s\": %s\n"),
 					progname, fn, strerror(errno));
@@ -160,6 +183,23 @@ open_walfile(StreamCtl *stream, XLogRecPtr startpoint)
 	}
 	free(zerobuf);
 
+	/*
+	 * fsync WAL file and containing directory, to ensure the file is
+	 * persistently created and zeroed. That's particularly important when
+	 * using synchronous mode, where the file is modified and fsynced
+	 * in-place, without a directory fsync.
+	 */
+	if (stream->do_sync)
+	{
+		if (fsync_fname(fn, false, progname) != 0 ||
+			fsync_parent_path(fn, progname) != 0)
+		{
+			/* error already printed */
+			close(f);
+			return false;
+		}
+	}
+
 	if (lseek(f, SEEK_SET, 0) != 0)
 	{
 		fprintf(stderr,
@@ -168,6 +208,8 @@ open_walfile(StreamCtl *stream, XLogRecPtr startpoint)
 		close(f);
 		return false;
 	}
+
+	/* File is open and ready to use */
 	walfile = f;
 	return true;
 }
@@ -191,13 +233,17 @@ close_walfile(StreamCtl *stream, XLogRecPtr pos)
 		fprintf(stderr,
 			 _("%s: could not determine seek position in file \"%s\": %s\n"),
 				progname, current_walfile_name, strerror(errno));
+		close(walfile);
+		walfile = -1;
 		return false;
 	}
 
-	if (fsync(walfile) != 0)
+	if (stream->do_sync && fsync(walfile) != 0)
 	{
 		fprintf(stderr, _("%s: could not fsync file \"%s\": %s\n"),
 				progname, current_walfile_name, strerror(errno));
+		close(walfile);
+		walfile = -1;
 		return false;
 	}
 
@@ -220,10 +266,9 @@ close_walfile(StreamCtl *stream, XLogRecPtr pos)
 
 		snprintf(oldfn, sizeof(oldfn), "%s/%s%s", stream->basedir, current_walfile_name, stream->partial_suffix);
 		snprintf(newfn, sizeof(newfn), "%s/%s", stream->basedir, current_walfile_name);
-		if (rename(oldfn, newfn) != 0)
+		if (durable_rename(oldfn, newfn, progname) != 0)
 		{
-			fprintf(stderr, _("%s: could not rename file \"%s\": %s\n"),
-					progname, current_walfile_name, strerror(errno));
+			/* durable_rename produced a log entry */
 			return false;
 		}
 	}
@@ -241,7 +286,8 @@ close_walfile(StreamCtl *stream, XLogRecPtr pos)
 	if (currpos == XLOG_SEG_SIZE && stream->mark_done)
 	{
 		/* writes error message if failed */
-		if (!mark_file_as_archived(stream->basedir, current_walfile_name))
+		if (!mark_file_as_archived(stream->basedir, current_walfile_name,
+								   stream->do_sync))
 			return false;
 	}
 
@@ -341,14 +387,6 @@ writeTimeLineHistoryFile(StreamCtl *stream, char *filename, char *content)
 		return false;
 	}
 
-	if (fsync(fd) != 0)
-	{
-		close(fd);
-		fprintf(stderr, _("%s: could not fsync file \"%s\": %s\n"),
-				progname, tmppath, strerror(errno));
-		return false;
-	}
-
 	if (close(fd) != 0)
 	{
 		fprintf(stderr, _("%s: could not close file \"%s\": %s\n"),
@@ -359,10 +397,9 @@ writeTimeLineHistoryFile(StreamCtl *stream, char *filename, char *content)
 	/*
 	 * Now move the completed history file into place with its final name.
 	 */
-	if (rename(tmppath, path) < 0)
+	if (durable_rename(tmppath, path, progname) < 0)
 	{
-		fprintf(stderr, _("%s: could not rename file \"%s\" to \"%s\": %s\n"),
-				progname, tmppath, path, strerror(errno));
+		/* durable_rename produced a log entry */
 		return false;
 	}
 
@@ -370,7 +407,8 @@ writeTimeLineHistoryFile(StreamCtl *stream, char *filename, char *content)
 	if (stream->mark_done)
 	{
 		/* writes error message if failed */
-		if (!mark_file_as_archived(stream->basedir, histfname))
+		if (!mark_file_as_archived(stream->basedir, histfname,
+								   stream->do_sync))
 			return false;
 	}
 
@@ -828,7 +866,7 @@ HandleCopyStream(PGconn *conn, StreamCtl *stream,
 		 */
 		if (stream->synchronous && lastFlushPosition < blockpos && walfile != -1)
 		{
-			if (fsync(walfile) != 0)
+			if (stream->do_sync && fsync(walfile) != 0)
 			{
 				fprintf(stderr, _("%s: could not fsync file \"%s\": %s\n"),
 						progname, current_walfile_name, strerror(errno));
@@ -882,7 +920,7 @@ HandleCopyStream(PGconn *conn, StreamCtl *stream,
 			/* Check the message type. */
 			if (copybuf[0] == 'k')
 			{
-				if (!ProcessKeepaliveMsg(conn, copybuf, r, blockpos,
+				if (!ProcessKeepaliveMsg(conn, stream, copybuf, r, blockpos,
 										 &last_status))
 					goto error;
 			}
@@ -1035,7 +1073,7 @@ CopyStreamReceive(PGconn *conn, long timeout, char **buffer)
  * Process the keepalive message.
  */
 static bool
-ProcessKeepaliveMsg(PGconn *conn, char *copybuf, int len,
+ProcessKeepaliveMsg(PGconn *conn, StreamCtl *stream, char *copybuf, int len,
 					XLogRecPtr blockpos, int64 *last_status)
 {
 	int			pos;
@@ -1071,7 +1109,7 @@ ProcessKeepaliveMsg(PGconn *conn, char *copybuf, int len,
 			 * data has been successfully replicated or not, at the normal
 			 * shutdown of the server.
 			 */
-			if (fsync(walfile) != 0)
+			if (stream->do_sync && fsync(walfile) != 0)
 			{
 				fprintf(stderr, _("%s: could not fsync file \"%s\": %s\n"),
 						progname, current_walfile_name, strerror(errno));
