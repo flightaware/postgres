@@ -71,7 +71,8 @@
 ProcessUtility_hook_type ProcessUtility_hook = NULL;
 
 /* local function declarations */
-static void ProcessUtilitySlow(Node *parsetree,
+static void ProcessUtilitySlow(ParseState *pstate,
+							   Node *parsetree,
 				   const char *queryString,
 				   ProcessUtilityContext context,
 				   ParamListInfo params,
@@ -147,6 +148,7 @@ check_xact_readonly(Node *parsetree)
 		case T_AlterFunctionStmt:
 		case T_AlterRoleStmt:
 		case T_AlterRoleSetStmt:
+		case T_AlterObjectDependsStmt:
 		case T_AlterObjectSchemaStmt:
 		case T_AlterOwnerStmt:
 		case T_AlterOperatorStmt:
@@ -357,11 +359,15 @@ standard_ProcessUtility(Node *parsetree,
 						char *completionTag)
 {
 	bool		isTopLevel = (context == PROCESS_UTILITY_TOPLEVEL);
+	ParseState *pstate;
 
 	check_xact_readonly(parsetree);
 
 	if (completionTag)
 		completionTag[0] = '\0';
+
+	pstate = make_parsestate(NULL);
+	pstate->p_sourcetext = queryString;
 
 	switch (nodeTag(parsetree))
 	{
@@ -539,7 +545,7 @@ standard_ProcessUtility(Node *parsetree,
 			{
 				uint64		processed;
 
-				DoCopy((CopyStmt *) parsetree, queryString, &processed);
+				DoCopy(pstate, (CopyStmt *) parsetree, &processed);
 				if (completionTag)
 					snprintf(completionTag, COMPLETION_TAG_BUFSIZE,
 							 "COPY " UINT64_FORMAT, processed);
@@ -570,12 +576,12 @@ standard_ProcessUtility(Node *parsetree,
 		case T_CreatedbStmt:
 			/* no event triggers for global objects */
 			PreventTransactionChain(isTopLevel, "CREATE DATABASE");
-			createdb((CreatedbStmt *) parsetree);
+			createdb(pstate, (CreatedbStmt *) parsetree);
 			break;
 
 		case T_AlterDatabaseStmt:
 			/* no event triggers for global objects */
-			AlterDatabase((AlterDatabaseStmt *) parsetree, isTopLevel);
+			AlterDatabase(pstate, (AlterDatabaseStmt *) parsetree, isTopLevel);
 			break;
 
 		case T_AlterDatabaseSetStmt:
@@ -656,7 +662,7 @@ standard_ProcessUtility(Node *parsetree,
 			break;
 
 		case T_ExplainStmt:
-			ExplainQuery((ExplainStmt *) parsetree, queryString, params, dest);
+			ExplainQuery(pstate, (ExplainStmt *) parsetree, queryString, params, dest);
 			break;
 
 		case T_AlterSystemStmt:
@@ -697,7 +703,7 @@ standard_ProcessUtility(Node *parsetree,
 			 */
 		case T_CreateRoleStmt:
 			/* no event triggers for global objects */
-			CreateRole((CreateRoleStmt *) parsetree);
+			CreateRole(pstate, (CreateRoleStmt *) parsetree);
 			break;
 
 		case T_AlterRoleStmt:
@@ -802,7 +808,7 @@ standard_ProcessUtility(Node *parsetree,
 				GrantStmt  *stmt = (GrantStmt *) parsetree;
 
 				if (EventTriggerSupportsGrantObjectType(stmt->objtype))
-					ProcessUtilitySlow(parsetree, queryString,
+					ProcessUtilitySlow(pstate, parsetree, queryString,
 									   context, params,
 									   dest, completionTag);
 				else
@@ -815,7 +821,7 @@ standard_ProcessUtility(Node *parsetree,
 				DropStmt   *stmt = (DropStmt *) parsetree;
 
 				if (EventTriggerSupportsObjectType(stmt->removeType))
-					ProcessUtilitySlow(parsetree, queryString,
+					ProcessUtilitySlow(pstate, parsetree, queryString,
 									   context, params,
 									   dest, completionTag);
 				else
@@ -828,11 +834,24 @@ standard_ProcessUtility(Node *parsetree,
 				RenameStmt *stmt = (RenameStmt *) parsetree;
 
 				if (EventTriggerSupportsObjectType(stmt->renameType))
-					ProcessUtilitySlow(parsetree, queryString,
+					ProcessUtilitySlow(pstate, parsetree, queryString,
 									   context, params,
 									   dest, completionTag);
 				else
 					ExecRenameStmt(stmt);
+			}
+			break;
+
+		case T_AlterObjectDependsStmt:
+			{
+				AlterObjectDependsStmt *stmt = (AlterObjectDependsStmt *) parsetree;
+
+				if (EventTriggerSupportsObjectType(stmt->objectType))
+					ProcessUtilitySlow(pstate, parsetree, queryString,
+									   context, params,
+									   dest, completionTag);
+				else
+					ExecAlterObjectDependsStmt(stmt, NULL);
 			}
 			break;
 
@@ -841,7 +860,7 @@ standard_ProcessUtility(Node *parsetree,
 				AlterObjectSchemaStmt *stmt = (AlterObjectSchemaStmt *) parsetree;
 
 				if (EventTriggerSupportsObjectType(stmt->objectType))
-					ProcessUtilitySlow(parsetree, queryString,
+					ProcessUtilitySlow(pstate, parsetree, queryString,
 									   context, params,
 									   dest, completionTag);
 				else
@@ -854,7 +873,7 @@ standard_ProcessUtility(Node *parsetree,
 				AlterOwnerStmt *stmt = (AlterOwnerStmt *) parsetree;
 
 				if (EventTriggerSupportsObjectType(stmt->objectType))
-					ProcessUtilitySlow(parsetree, queryString,
+					ProcessUtilitySlow(pstate, parsetree, queryString,
 									   context, params,
 									   dest, completionTag);
 				else
@@ -867,7 +886,7 @@ standard_ProcessUtility(Node *parsetree,
 				CommentStmt *stmt = (CommentStmt *) parsetree;
 
 				if (EventTriggerSupportsObjectType(stmt->objtype))
-					ProcessUtilitySlow(parsetree, queryString,
+					ProcessUtilitySlow(pstate, parsetree, queryString,
 									   context, params,
 									   dest, completionTag);
 				else
@@ -880,7 +899,7 @@ standard_ProcessUtility(Node *parsetree,
 				SecLabelStmt *stmt = (SecLabelStmt *) parsetree;
 
 				if (EventTriggerSupportsObjectType(stmt->objtype))
-					ProcessUtilitySlow(parsetree, queryString,
+					ProcessUtilitySlow(pstate, parsetree, queryString,
 									   context, params,
 									   dest, completionTag);
 				else
@@ -890,11 +909,13 @@ standard_ProcessUtility(Node *parsetree,
 
 		default:
 			/* All other statement types have event trigger support */
-			ProcessUtilitySlow(parsetree, queryString,
+			ProcessUtilitySlow(pstate, parsetree, queryString,
 							   context, params,
 							   dest, completionTag);
 			break;
 	}
+
+	free_parsestate(pstate);
 }
 
 /*
@@ -903,7 +924,8 @@ standard_ProcessUtility(Node *parsetree,
  * perform the trigger support calls if the context allows it.
  */
 static void
-ProcessUtilitySlow(Node *parsetree,
+ProcessUtilitySlow(ParseState *pstate,
+				   Node *parsetree,
 				   const char *queryString,
 				   ProcessUtilityContext context,
 				   ParamListInfo params,
@@ -1177,9 +1199,9 @@ ProcessUtilitySlow(Node *parsetree,
 					{
 						case OBJECT_AGGREGATE:
 							address =
-								DefineAggregate(stmt->defnames, stmt->args,
+								DefineAggregate(pstate, stmt->defnames, stmt->args,
 												stmt->oldstyle,
-											  stmt->definition, queryString);
+												stmt->definition);
 							break;
 						case OBJECT_OPERATOR:
 							Assert(stmt->args == NIL);
@@ -1188,7 +1210,8 @@ ProcessUtilitySlow(Node *parsetree,
 							break;
 						case OBJECT_TYPE:
 							Assert(stmt->args == NIL);
-							address = DefineType(stmt->defnames,
+							address = DefineType(pstate,
+												 stmt->defnames,
 												 stmt->definition);
 							break;
 						case OBJECT_TSPARSER:
@@ -1214,7 +1237,8 @@ ProcessUtilitySlow(Node *parsetree,
 							break;
 						case OBJECT_COLLATION:
 							Assert(stmt->args == NIL);
-							address = DefineCollation(stmt->defnames,
+							address = DefineCollation(pstate,
+													  stmt->defnames,
 													  stmt->definition);
 							break;
 						default:
@@ -1279,11 +1303,11 @@ ProcessUtilitySlow(Node *parsetree,
 				break;
 
 			case T_CreateExtensionStmt:
-				address = CreateExtension((CreateExtensionStmt *) parsetree);
+				address = CreateExtension(pstate, (CreateExtensionStmt *) parsetree);
 				break;
 
 			case T_AlterExtensionStmt:
-				address = ExecAlterExtensionStmt((AlterExtensionStmt *) parsetree);
+				address = ExecAlterExtensionStmt(pstate, (AlterExtensionStmt *) parsetree);
 				break;
 
 			case T_AlterExtensionContentsStmt:
@@ -1345,7 +1369,7 @@ ProcessUtilitySlow(Node *parsetree,
 				break;
 
 			case T_AlterEnumStmt:		/* ALTER TYPE (enum) */
-				address = AlterEnum((AlterEnumStmt *) parsetree, isTopLevel);
+				address = AlterEnum((AlterEnumStmt *) parsetree);
 				break;
 
 			case T_ViewStmt:	/* CREATE VIEW */
@@ -1359,11 +1383,11 @@ ProcessUtilitySlow(Node *parsetree,
 				break;
 
 			case T_CreateFunctionStmt:	/* CREATE FUNCTION */
-				address = CreateFunction((CreateFunctionStmt *) parsetree, queryString);
+				address = CreateFunction(pstate, (CreateFunctionStmt *) parsetree);
 				break;
 
 			case T_AlterFunctionStmt:	/* ALTER FUNCTION */
-				address = AlterFunction((AlterFunctionStmt *) parsetree);
+				address = AlterFunction(pstate, (AlterFunctionStmt *) parsetree);
 				break;
 
 			case T_RuleStmt:	/* CREATE RULE */
@@ -1371,11 +1395,11 @@ ProcessUtilitySlow(Node *parsetree,
 				break;
 
 			case T_CreateSeqStmt:
-				address = DefineSequence((CreateSeqStmt *) parsetree);
+				address = DefineSequence(pstate, (CreateSeqStmt *) parsetree);
 				break;
 
 			case T_AlterSeqStmt:
-				address = AlterSequence((AlterSeqStmt *) parsetree);
+				address = AlterSequence(pstate, (AlterSeqStmt *) parsetree);
 				break;
 
 			case T_CreateTableAsStmt:
@@ -1472,6 +1496,12 @@ ProcessUtilitySlow(Node *parsetree,
 				address = ExecRenameStmt((RenameStmt *) parsetree);
 				break;
 
+			case T_AlterObjectDependsStmt:
+				address =
+					ExecAlterObjectDependsStmt((AlterObjectDependsStmt *) parsetree,
+											   &secondaryObject);
+				break;
+
 			case T_AlterObjectSchemaStmt:
 				address =
 					ExecAlterObjectSchemaStmt((AlterObjectSchemaStmt *) parsetree,
@@ -1503,7 +1533,7 @@ ProcessUtilitySlow(Node *parsetree,
 				break;
 
 			case T_AlterDefaultPrivilegesStmt:
-				ExecAlterDefaultPrivilegesStmt((AlterDefaultPrivilegesStmt *) parsetree);
+				ExecAlterDefaultPrivilegesStmt(pstate, (AlterDefaultPrivilegesStmt *) parsetree);
 				EventTriggerCollectAlterDefPrivs((AlterDefaultPrivilegesStmt *) parsetree);
 				commandCollected = true;
 				break;
@@ -1518,6 +1548,10 @@ ProcessUtilitySlow(Node *parsetree,
 
 			case T_SecLabelStmt:
 				address = ExecSecLabelStmt((SecLabelStmt *) parsetree);
+				break;
+
+			case T_CreateAmStmt:
+				address = CreateAccessMethod((CreateAmStmt *) parsetree);
 				break;
 
 			default:
@@ -2160,6 +2194,9 @@ CreateCommandTag(Node *parsetree)
 				case OBJECT_TRANSFORM:
 					tag = "DROP TRANSFORM";
 					break;
+				case OBJECT_ACCESS_METHOD:
+					tag = "DROP ACCESS METHOD";
+					break;
 				default:
 					tag = "???";
 			}
@@ -2183,6 +2220,10 @@ CreateCommandTag(Node *parsetree)
 
 		case T_RenameStmt:
 			tag = AlterObjectTypeCommandTag(((RenameStmt *) parsetree)->renameType);
+			break;
+
+		case T_AlterObjectDependsStmt:
+			tag = AlterObjectTypeCommandTag(((AlterObjectDependsStmt *) parsetree)->objectType);
 			break;
 
 		case T_AlterObjectSchemaStmt:
@@ -2255,6 +2296,9 @@ CreateCommandTag(Node *parsetree)
 					break;
 				case OBJECT_COLLATION:
 					tag = "CREATE COLLATION";
+					break;
+				case OBJECT_ACCESS_METHOD:
+					tag = "CREATE ACCESS METHOD";
 					break;
 				default:
 					tag = "???";
@@ -2517,6 +2561,10 @@ CreateCommandTag(Node *parsetree)
 
 		case T_AlterPolicyStmt:
 			tag = "ALTER POLICY";
+			break;
+
+		case T_CreateAmStmt:
+			tag = "CREATE ACCESS METHOD";
 			break;
 
 		case T_PrepareStmt:
@@ -2808,6 +2856,10 @@ GetCommandLogLevel(Node *parsetree)
 			lev = LOGSTMT_DDL;
 			break;
 
+		case T_AlterObjectDependsStmt:
+			lev = LOGSTMT_DDL;
+			break;
+
 		case T_AlterObjectSchemaStmt:
 			lev = LOGSTMT_DDL;
 			break;
@@ -3073,6 +3125,10 @@ GetCommandLogLevel(Node *parsetree)
 			break;
 
 		case T_AlterTSConfigurationStmt:
+			lev = LOGSTMT_DDL;
+			break;
+
+		case T_CreateAmStmt:
 			lev = LOGSTMT_DDL;
 			break;
 

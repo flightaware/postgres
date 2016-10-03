@@ -89,7 +89,7 @@
 #include <mstcpip.h>
 #endif
 
-#include "libpq/ip.h"
+#include "common/ip.h"
 #include "libpq/libpq.h"
 #include "miscadmin.h"
 #include "storage/ipc.h"
@@ -145,7 +145,6 @@ static void socket_startcopyout(void);
 static void socket_endcopyout(bool errorAbort);
 static int	internal_putbytes(const char *s, size_t len);
 static int	internal_flush(void);
-static void socket_set_nonblocking(bool nonblocking);
 
 #ifdef HAVE_UNIX_SOCKETS
 static int	Lock_AF_UNIX(char *unixSocketDir, char *unixSocketPath);
@@ -165,6 +164,7 @@ static PQcommMethods PqCommSocketMethods = {
 
 PQcommMethods *PqCommMethods = &PqCommSocketMethods;
 
+WaitEventSet *FeBeWaitSet;
 
 
 /* --------------------------------
@@ -201,6 +201,11 @@ pq_init(void)
 				(errmsg("could not set socket to nonblocking mode: %m")));
 #endif
 
+	FeBeWaitSet = CreateWaitEventSet(TopMemoryContext, 3);
+	AddWaitEventToSet(FeBeWaitSet, WL_SOCKET_WRITEABLE, MyProcPort->sock,
+					  NULL, NULL);
+	AddWaitEventToSet(FeBeWaitSet, WL_LATCH_SET, -1, MyLatch, NULL);
+	AddWaitEventToSet(FeBeWaitSet, WL_POSTMASTER_DEATH, -1, NULL, NULL);
 }
 
 /* --------------------------------
@@ -1168,7 +1173,7 @@ pq_startmsgread(void)
 	if (PqCommReadingMsg)
 		ereport(FATAL,
 				(errcode(ERRCODE_PROTOCOL_VIOLATION),
-		   errmsg("terminating connection because protocol synchronization was lost")));
+				 errmsg("terminating connection because protocol synchronization was lost")));
 
 	PqCommReadingMsg = true;
 }

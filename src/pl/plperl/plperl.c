@@ -12,8 +12,9 @@
 /* system stuff */
 #include <ctype.h>
 #include <fcntl.h>
-#include <unistd.h>
+#include <limits.h>
 #include <locale.h>
+#include <unistd.h>
 
 /* postgreSQL stuff */
 #include "access/htup_details.h"
@@ -97,17 +98,19 @@ typedef struct plperl_interp_desc
 /**********************************************************************
  * The information we cache about loaded procedures
  *
- * The refcount field counts the struct's reference from the hash table shown
- * below, plus one reference for each function call level that is using the
- * struct.  We can release the struct, and the associated Perl sub, when the
- * refcount goes to zero.
+ * The fn_refcount field counts the struct's reference from the hash table
+ * shown below, plus one reference for each function call level that is using
+ * the struct.  We can release the struct, and the associated Perl sub, when
+ * the fn_refcount goes to zero.  Releasing the struct itself is done by
+ * deleting the fn_cxt, which also gets rid of all subsidiary data.
  **********************************************************************/
 typedef struct plperl_proc_desc
 {
 	char	   *proname;		/* user name of procedure */
+	MemoryContext fn_cxt;		/* memory context for this procedure */
+	unsigned long fn_refcount;	/* number of active references */
 	TransactionId fn_xmin;		/* xmin/TID of procedure's pg_proc tuple */
 	ItemPointerData fn_tid;
-	int			refcount;		/* reference count of this struct */
 	SV		   *reference;		/* CODE reference for Perl sub */
 	plperl_interp_desc *interp; /* interpreter it's created in */
 	bool		fn_readonly;	/* is function readonly (not volatile)? */
@@ -121,18 +124,19 @@ typedef struct plperl_proc_desc
 	Oid			result_oid;		/* Oid of result type */
 	FmgrInfo	result_in_func; /* I/O function and arg for result type */
 	Oid			result_typioparam;
-	/* Conversion info for function's argument types: */
+	/* Per-argument info for function's argument types: */
 	int			nargs;
-	FmgrInfo	arg_out_func[FUNC_MAX_ARGS];
-	bool		arg_is_rowtype[FUNC_MAX_ARGS];
-	Oid			arg_arraytype[FUNC_MAX_ARGS];	/* InvalidOid if not an array */
+	FmgrInfo   *arg_out_func;	/* output fns for arg types */
+	bool	   *arg_is_rowtype; /* is each arg composite? */
+	Oid		   *arg_arraytype;	/* InvalidOid if not an array */
 } plperl_proc_desc;
 
 #define increment_prodesc_refcount(prodesc)  \
-	((prodesc)->refcount++)
+	((prodesc)->fn_refcount++)
 #define decrement_prodesc_refcount(prodesc)  \
 	do { \
-		if (--((prodesc)->refcount) <= 0) \
+		Assert((prodesc)->fn_refcount > 0); \
+		if (--((prodesc)->fn_refcount) == 0) \
 			free_plperl_function(prodesc); \
 	} while(0)
 
@@ -281,7 +285,7 @@ static Datum plperl_hash_to_datum(SV *src, TupleDesc td);
 static void plperl_init_shared_libs(pTHX);
 static void plperl_trusted_init(void);
 static void plperl_untrusted_init(void);
-static HV  *plperl_spi_execute_fetch_result(SPITupleTable *, int, int);
+static HV  *plperl_spi_execute_fetch_result(SPITupleTable *, uint64, int);
 static char *hek2cstr(HE *he);
 static SV **hv_store_string(HV *hv, const char *key, SV *val);
 static SV **hv_fetch_string(HV *hv, const char *key);
@@ -350,23 +354,6 @@ hek2cstr(HE *he)
 	LEAVE;
 
 	return ret;
-}
-
-/*
- * This routine is a crock, and so is everyplace that calls it.  The problem
- * is that the cached form of plperl functions/queries is allocated permanently
- * (mostly via malloc()) and never released until backend exit.  Subsidiary
- * data structures such as fmgr info records therefore must live forever
- * as well.  A better implementation would store all this stuff in a per-
- * function memory context that could be reclaimed at need.  In the meantime,
- * fmgr_info_cxt must be called specifying TopMemoryContext so that whatever
- * it might allocate, and whatever the eventual function might allocate using
- * fn_mcxt, will live forever too.
- */
-static void
-perm_fmgr_info(Oid functionId, FmgrInfo *finfo)
-{
-	fmgr_info_cxt(functionId, finfo, TopMemoryContext);
 }
 
 
@@ -1432,6 +1419,10 @@ plperl_ref_from_pg_array(Datum arg, Oid typid)
 	SV		   *av;
 	HV		   *hv;
 
+	/*
+	 * Currently we make no effort to cache any of the stuff we look up here,
+	 * which is bad.
+	 */
 	info = palloc0(sizeof(plperl_array_info));
 
 	/* get element type information, including output conversion function */
@@ -1439,10 +1430,16 @@ plperl_ref_from_pg_array(Datum arg, Oid typid)
 					 &typlen, &typbyval, &typalign,
 					 &typdelim, &typioparam, &typoutputfunc);
 
-	if ((transform_funcid = get_transform_fromsql(elementtype, current_call_data->prodesc->lang_oid, current_call_data->prodesc->trftypes)))
-		perm_fmgr_info(transform_funcid, &info->transform_proc);
+	/* Check for a transform function */
+	transform_funcid = get_transform_fromsql(elementtype,
+										current_call_data->prodesc->lang_oid,
+									   current_call_data->prodesc->trftypes);
+
+	/* Look up transform or output function as appropriate */
+	if (OidIsValid(transform_funcid))
+		fmgr_info(transform_funcid, &info->transform_proc);
 	else
-		perm_fmgr_info(typoutputfunc, &info->proc);
+		fmgr_info(typoutputfunc, &info->proc);
 
 	info->elem_is_rowtype = type_is_rowtype(elementtype);
 
@@ -1450,21 +1447,29 @@ plperl_ref_from_pg_array(Datum arg, Oid typid)
 	info->ndims = ARR_NDIM(ar);
 	dims = ARR_DIMS(ar);
 
-	deconstruct_array(ar, elementtype, typlen, typbyval,
-					  typalign, &info->elements, &info->nulls,
-					  &nitems);
+	/* No dimensions? Return an empty array */
+	if (info->ndims == 0)
+	{
+		av = newRV_noinc((SV *) newAV());
+	}
+	else
+	{
+		deconstruct_array(ar, elementtype, typlen, typbyval,
+						  typalign, &info->elements, &info->nulls,
+						  &nitems);
 
-	/* Get total number of elements in each dimension */
-	info->nelems = palloc(sizeof(int) * info->ndims);
-	info->nelems[0] = nitems;
-	for (i = 1; i < info->ndims; i++)
-		info->nelems[i] = info->nelems[i - 1] / dims[i - 1];
+		/* Get total number of elements in each dimension */
+		info->nelems = palloc(sizeof(int) * info->ndims);
+		info->nelems[0] = nitems;
+		for (i = 1; i < info->ndims; i++)
+			info->nelems[i] = info->nelems[i - 1] / dims[i - 1];
 
-	av = split_array(info, 0, nitems, 0);
+		av = split_array(info, 0, nitems, 0);
+	}
 
 	hv = newHV();
 	(void) hv_store(hv, "array", 5, av, 0);
-	(void) hv_store(hv, "typeoid", 7, newSViv(typid), 0);
+	(void) hv_store(hv, "typeoid", 7, newSVuv(typid), 0);
 
 	return sv_bless(newRV_noinc((SV *) hv),
 					gv_stashpv("PostgreSQL::InServer::ARRAY", 0));
@@ -1478,6 +1483,9 @@ split_array(plperl_array_info *info, int first, int last, int nest)
 {
 	int			i;
 	AV		   *result;
+
+	/* we should only be called when we have something to split */
+	Assert(info->ndims > 0);
 
 	/* since this function recurses, it could be driven to stack overflow */
 	check_stack_depth();
@@ -1779,18 +1787,18 @@ plperl_call_handler(PG_FUNCTION_ARGS)
 	}
 	PG_CATCH();
 	{
-		if (this_call_data.prodesc)
-			decrement_prodesc_refcount(this_call_data.prodesc);
 		current_call_data = save_call_data;
 		activate_interpreter(oldinterp);
+		if (this_call_data.prodesc)
+			decrement_prodesc_refcount(this_call_data.prodesc);
 		PG_RE_THROW();
 	}
 	PG_END_TRY();
 
-	if (this_call_data.prodesc)
-		decrement_prodesc_refcount(this_call_data.prodesc);
 	current_call_data = save_call_data;
 	activate_interpreter(oldinterp);
+	if (this_call_data.prodesc)
+		decrement_prodesc_refcount(this_call_data.prodesc);
 	return retval;
 }
 
@@ -2604,7 +2612,7 @@ validate_plperl_function(plperl_proc_ptr *proc_ptr, HeapTuple procTup)
 static void
 free_plperl_function(plperl_proc_desc *prodesc)
 {
-	Assert(prodesc->refcount <= 0);
+	Assert(prodesc->fn_refcount == 0);
 	/* Release CODE reference, if we have one, from the appropriate interp */
 	if (prodesc->reference)
 	{
@@ -2614,12 +2622,8 @@ free_plperl_function(plperl_proc_desc *prodesc)
 		SvREFCNT_dec(prodesc->reference);
 		activate_interpreter(oldinterp);
 	}
-	/* Get rid of what we conveniently can of our own structs */
-	/* (FmgrInfo subsidiary info will get leaked ...) */
-	if (prodesc->proname)
-		free(prodesc->proname);
-	list_free(prodesc->trftypes);
-	free(prodesc);
+	/* Release all PG-owned data for this proc */
+	MemoryContextDelete(prodesc->fn_cxt);
 }
 
 
@@ -2630,8 +2634,8 @@ compile_plperl_function(Oid fn_oid, bool is_trigger, bool is_event_trigger)
 	Form_pg_proc procStruct;
 	plperl_proc_key proc_key;
 	plperl_proc_ptr *proc_ptr;
-	plperl_proc_desc *prodesc = NULL;
-	int			i;
+	plperl_proc_desc *volatile prodesc = NULL;
+	volatile MemoryContext proc_cxt = NULL;
 	plperl_interp_desc *oldinterp = plperl_active_interp;
 	ErrorContextCallback plperl_error_context;
 
@@ -2641,41 +2645,50 @@ compile_plperl_function(Oid fn_oid, bool is_trigger, bool is_event_trigger)
 		elog(ERROR, "cache lookup failed for function %u", fn_oid);
 	procStruct = (Form_pg_proc) GETSTRUCT(procTup);
 
+	/*
+	 * Try to find function in plperl_proc_hash.  The reason for this
+	 * overcomplicated-seeming lookup procedure is that we don't know whether
+	 * it's plperl or plperlu, and don't want to spend a lookup in pg_language
+	 * to find out.
+	 */
+	proc_key.proc_id = fn_oid;
+	proc_key.is_trigger = is_trigger;
+	proc_key.user_id = GetUserId();
+	proc_ptr = hash_search(plperl_proc_hash, &proc_key,
+						   HASH_FIND, NULL);
+	if (validate_plperl_function(proc_ptr, procTup))
+	{
+		/* Found valid plperl entry */
+		ReleaseSysCache(procTup);
+		return proc_ptr->proc_ptr;
+	}
+
+	/* If not found or obsolete, maybe it's plperlu */
+	proc_key.user_id = InvalidOid;
+	proc_ptr = hash_search(plperl_proc_hash, &proc_key,
+						   HASH_FIND, NULL);
+	if (validate_plperl_function(proc_ptr, procTup))
+	{
+		/* Found valid plperlu entry */
+		ReleaseSysCache(procTup);
+		return proc_ptr->proc_ptr;
+	}
+
+	/************************************************************
+	 * If we haven't found it in the hashtable, we analyze
+	 * the function's arguments and return type and store
+	 * the in-/out-functions in the prodesc block,
+	 * then we load the procedure into the Perl interpreter,
+	 * and last we create a new hashtable entry for it.
+	 ************************************************************/
+
 	/* Set a callback for reporting compilation errors */
 	plperl_error_context.callback = plperl_compile_callback;
 	plperl_error_context.previous = error_context_stack;
 	plperl_error_context.arg = NameStr(procStruct->proname);
 	error_context_stack = &plperl_error_context;
 
-	/* Try to find function in plperl_proc_hash */
-	proc_key.proc_id = fn_oid;
-	proc_key.is_trigger = is_trigger;
-	proc_key.user_id = GetUserId();
-
-	proc_ptr = hash_search(plperl_proc_hash, &proc_key,
-						   HASH_FIND, NULL);
-
-	if (validate_plperl_function(proc_ptr, procTup))
-		prodesc = proc_ptr->proc_ptr;
-	else
-	{
-		/* If not found or obsolete, maybe it's plperlu */
-		proc_key.user_id = InvalidOid;
-		proc_ptr = hash_search(plperl_proc_hash, &proc_key,
-							   HASH_FIND, NULL);
-		if (validate_plperl_function(proc_ptr, procTup))
-			prodesc = proc_ptr->proc_ptr;
-	}
-
-	/************************************************************
-	 * If we haven't found it in the hashtable, we analyze
-	 * the function's arguments and return type and store
-	 * the in-/out-functions in the prodesc block and create
-	 * a new hashtable entry for it.
-	 *
-	 * Then we load the procedure into the Perl interpreter.
-	 ************************************************************/
-	if (prodesc == NULL)
+	PG_TRY();
 	{
 		HeapTuple	langTup;
 		HeapTuple	typeTup;
@@ -2685,42 +2698,42 @@ compile_plperl_function(Oid fn_oid, bool is_trigger, bool is_event_trigger)
 		Datum		prosrcdatum;
 		bool		isnull;
 		char	   *proc_source;
+		MemoryContext oldcontext;
 
 		/************************************************************
-		 * Allocate a new procedure description block
+		 * Allocate a context that will hold all PG data for the procedure.
 		 ************************************************************/
-		prodesc = (plperl_proc_desc *) malloc(sizeof(plperl_proc_desc));
-		if (prodesc == NULL)
-			ereport(ERROR,
-					(errcode(ERRCODE_OUT_OF_MEMORY),
-					 errmsg("out of memory")));
-		/* Initialize all fields to 0 so free_plperl_function is safe */
-		MemSet(prodesc, 0, sizeof(plperl_proc_desc));
+		proc_cxt = AllocSetContextCreate(TopMemoryContext,
+										 NameStr(procStruct->proname),
+										 ALLOCSET_SMALL_SIZES);
 
-		prodesc->proname = strdup(NameStr(procStruct->proname));
-		if (prodesc->proname == NULL)
-		{
-			free_plperl_function(prodesc);
-			ereport(ERROR,
-					(errcode(ERRCODE_OUT_OF_MEMORY),
-					 errmsg("out of memory")));
-		}
+		/************************************************************
+		 * Allocate and fill a new procedure description block.
+		 * struct prodesc and subsidiary data must all live in proc_cxt.
+		 ************************************************************/
+		oldcontext = MemoryContextSwitchTo(proc_cxt);
+		prodesc = (plperl_proc_desc *) palloc0(sizeof(plperl_proc_desc));
+		prodesc->proname = pstrdup(NameStr(procStruct->proname));
+		prodesc->fn_cxt = proc_cxt;
+		prodesc->fn_refcount = 0;
 		prodesc->fn_xmin = HeapTupleHeaderGetRawXmin(procTup->t_data);
 		prodesc->fn_tid = procTup->t_self;
+		prodesc->nargs = procStruct->pronargs;
+		prodesc->arg_out_func = (FmgrInfo *) palloc0(prodesc->nargs * sizeof(FmgrInfo));
+		prodesc->arg_is_rowtype = (bool *) palloc0(prodesc->nargs * sizeof(bool));
+		prodesc->arg_arraytype = (Oid *) palloc0(prodesc->nargs * sizeof(Oid));
+		MemoryContextSwitchTo(oldcontext);
 
 		/* Remember if function is STABLE/IMMUTABLE */
 		prodesc->fn_readonly =
 			(procStruct->provolatile != PROVOLATILE_VOLATILE);
 
-		{
-			MemoryContext oldcxt;
-
-			protrftypes_datum = SysCacheGetAttr(PROCOID, procTup,
+		/* Fetch protrftypes */
+		protrftypes_datum = SysCacheGetAttr(PROCOID, procTup,
 										  Anum_pg_proc_protrftypes, &isnull);
-			oldcxt = MemoryContextSwitchTo(TopMemoryContext);
-			prodesc->trftypes = isnull ? NIL : oid_array_to_list(protrftypes_datum);
-			MemoryContextSwitchTo(oldcxt);
-		}
+		MemoryContextSwitchTo(proc_cxt);
+		prodesc->trftypes = isnull ? NIL : oid_array_to_list(protrftypes_datum);
+		MemoryContextSwitchTo(oldcontext);
 
 		/************************************************************
 		 * Lookup the pg_language tuple by Oid
@@ -2728,11 +2741,8 @@ compile_plperl_function(Oid fn_oid, bool is_trigger, bool is_event_trigger)
 		langTup = SearchSysCache1(LANGOID,
 								  ObjectIdGetDatum(procStruct->prolang));
 		if (!HeapTupleIsValid(langTup))
-		{
-			free_plperl_function(prodesc);
 			elog(ERROR, "cache lookup failed for language %u",
 				 procStruct->prolang);
-		}
 		langStruct = (Form_pg_language) GETSTRUCT(langTup);
 		prodesc->lang_oid = HeapTupleGetOid(langTup);
 		prodesc->lanpltrusted = langStruct->lanpltrusted;
@@ -2748,11 +2758,8 @@ compile_plperl_function(Oid fn_oid, bool is_trigger, bool is_event_trigger)
 				SearchSysCache1(TYPEOID,
 								ObjectIdGetDatum(procStruct->prorettype));
 			if (!HeapTupleIsValid(typeTup))
-			{
-				free_plperl_function(prodesc);
 				elog(ERROR, "cache lookup failed for type %u",
 					 procStruct->prorettype);
-			}
 			typeStruct = (Form_pg_type) GETSTRUCT(typeTup);
 
 			/* Disallow pseudotype result, except VOID or RECORD */
@@ -2763,21 +2770,15 @@ compile_plperl_function(Oid fn_oid, bool is_trigger, bool is_event_trigger)
 					 /* okay */ ;
 				else if (procStruct->prorettype == TRIGGEROID ||
 						 procStruct->prorettype == EVTTRIGGEROID)
-				{
-					free_plperl_function(prodesc);
 					ereport(ERROR,
 							(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
 							 errmsg("trigger functions can only be called "
 									"as triggers")));
-				}
 				else
-				{
-					free_plperl_function(prodesc);
 					ereport(ERROR,
 							(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
 							 errmsg("PL/Perl functions cannot return type %s",
 									format_type_be(procStruct->prorettype))));
-				}
 			}
 
 			prodesc->result_oid = procStruct->prorettype;
@@ -2788,7 +2789,9 @@ compile_plperl_function(Oid fn_oid, bool is_trigger, bool is_event_trigger)
 			prodesc->fn_retisarray =
 				(typeStruct->typlen == -1 && typeStruct->typelem);
 
-			perm_fmgr_info(typeStruct->typinput, &(prodesc->result_in_func));
+			fmgr_info_cxt(typeStruct->typinput,
+						  &(prodesc->result_in_func),
+						  proc_cxt);
 			prodesc->result_typioparam = getTypeIOParam(typeTup);
 
 			ReleaseSysCache(typeTup);
@@ -2800,29 +2803,24 @@ compile_plperl_function(Oid fn_oid, bool is_trigger, bool is_event_trigger)
 		 ************************************************************/
 		if (!is_trigger && !is_event_trigger)
 		{
-			prodesc->nargs = procStruct->pronargs;
+			int			i;
+
 			for (i = 0; i < prodesc->nargs; i++)
 			{
 				typeTup = SearchSysCache1(TYPEOID,
 						ObjectIdGetDatum(procStruct->proargtypes.values[i]));
 				if (!HeapTupleIsValid(typeTup))
-				{
-					free_plperl_function(prodesc);
 					elog(ERROR, "cache lookup failed for type %u",
 						 procStruct->proargtypes.values[i]);
-				}
 				typeStruct = (Form_pg_type) GETSTRUCT(typeTup);
 
 				/* Disallow pseudotype argument */
 				if (typeStruct->typtype == TYPTYPE_PSEUDO &&
 					procStruct->proargtypes.values[i] != RECORDOID)
-				{
-					free_plperl_function(prodesc);
 					ereport(ERROR,
 							(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
 							 errmsg("PL/Perl functions cannot accept type %s",
 						format_type_be(procStruct->proargtypes.values[i]))));
-				}
 
 				if (typeStruct->typtype == TYPTYPE_COMPOSITE ||
 					procStruct->proargtypes.values[i] == RECORDOID)
@@ -2830,8 +2828,9 @@ compile_plperl_function(Oid fn_oid, bool is_trigger, bool is_event_trigger)
 				else
 				{
 					prodesc->arg_is_rowtype[i] = false;
-					perm_fmgr_info(typeStruct->typoutput,
-								   &(prodesc->arg_out_func[i]));
+					fmgr_info_cxt(typeStruct->typoutput,
+								  &(prodesc->arg_out_func[i]),
+								  proc_cxt);
 				}
 
 				/* Identify array attributes */
@@ -2868,22 +2867,42 @@ compile_plperl_function(Oid fn_oid, bool is_trigger, bool is_event_trigger)
 		activate_interpreter(oldinterp);
 
 		pfree(proc_source);
+
 		if (!prodesc->reference)	/* can this happen? */
-		{
-			free_plperl_function(prodesc);
 			elog(ERROR, "could not create PL/Perl internal procedure");
-		}
 
 		/************************************************************
-		 * OK, link the procedure into the correct hashtable entry
+		 * OK, link the procedure into the correct hashtable entry.
+		 * Note we assume that the hashtable entry either doesn't exist yet,
+		 * or we already cleared its proc_ptr during the validation attempts
+		 * above.  So no need to decrement an old refcount here.
 		 ************************************************************/
 		proc_key.user_id = prodesc->lanpltrusted ? GetUserId() : InvalidOid;
 
 		proc_ptr = hash_search(plperl_proc_hash, &proc_key,
 							   HASH_ENTER, NULL);
+		/* We assume these two steps can't throw an error: */
 		proc_ptr->proc_ptr = prodesc;
 		increment_prodesc_refcount(prodesc);
 	}
+	PG_CATCH();
+	{
+		/*
+		 * If we got as far as creating a reference, we should be able to use
+		 * free_plperl_function() to clean up.  If not, then at most we have
+		 * some PG memory resources in proc_cxt, which we can just delete.
+		 */
+		if (prodesc && prodesc->reference)
+			free_plperl_function(prodesc);
+		else if (proc_cxt)
+			MemoryContextDelete(proc_cxt);
+
+		/* Be sure to restore the previous interpreter, too, for luck */
+		activate_interpreter(oldinterp);
+
+		PG_RE_THROW();
+	}
+	PG_END_TRY();
 
 	/* restore previous error callback */
 	error_context_stack = plperl_error_context.previous;
@@ -3080,7 +3099,7 @@ plperl_spi_exec(char *query, int limit)
 
 
 static HV  *
-plperl_spi_execute_fetch_result(SPITupleTable *tuptable, int processed,
+plperl_spi_execute_fetch_result(SPITupleTable *tuptable, uint64 processed,
 								int status)
 {
 	HV		   *result;
@@ -3092,13 +3111,21 @@ plperl_spi_execute_fetch_result(SPITupleTable *tuptable, int processed,
 	hv_store_string(result, "status",
 					cstr2sv(SPI_result_code_string(status)));
 	hv_store_string(result, "processed",
-					newSViv(processed));
+					(processed > (uint64) UV_MAX) ?
+					newSVnv((NV) processed) :
+					newSVuv((UV) processed));
 
 	if (status > 0 && tuptable)
 	{
 		AV		   *rows;
 		SV		   *row;
-		int			i;
+		uint64		i;
+
+		/* Prevent overflow in call to av_extend() */
+		if (processed > (uint64) AV_SIZE_MAX)
+			ereport(ERROR,
+					(errcode(ERRCODE_PROGRAM_LIMIT_EXCEEDED),
+			errmsg("query result has too many rows to fit in a Perl array")));
 
 		rows = newAV();
 		av_extend(rows, processed);
@@ -3185,9 +3212,7 @@ plperl_return_next(SV *sv)
 		current_call_data->tmp_cxt =
 			AllocSetContextCreate(CurrentMemoryContext,
 								  "PL/Perl return_next temporary cxt",
-								  ALLOCSET_DEFAULT_MINSIZE,
-								  ALLOCSET_DEFAULT_INITSIZE,
-								  ALLOCSET_DEFAULT_MAXSIZE);
+								  ALLOCSET_DEFAULT_SIZES);
 	}
 
 	old_cxt = MemoryContextSwitchTo(current_call_data->tmp_cxt);
@@ -3440,9 +3465,7 @@ plperl_spi_prepare(char *query, int argc, SV **argv)
 		 ************************************************************/
 		plan_cxt = AllocSetContextCreate(TopMemoryContext,
 										 "PL/Perl spi_prepare query",
-										 ALLOCSET_SMALL_MINSIZE,
-										 ALLOCSET_SMALL_INITSIZE,
-										 ALLOCSET_SMALL_MAXSIZE);
+										 ALLOCSET_SMALL_SIZES);
 		MemoryContextSwitchTo(plan_cxt);
 		qdesc = (plperl_query_desc *) palloc0(sizeof(plperl_query_desc));
 		snprintf(qdesc->qname, sizeof(qdesc->qname), "%p", qdesc);
@@ -3459,9 +3482,7 @@ plperl_spi_prepare(char *query, int argc, SV **argv)
 		 ************************************************************/
 		work_cxt = AllocSetContextCreate(CurrentMemoryContext,
 										 "PL/Perl spi_prepare workspace",
-										 ALLOCSET_DEFAULT_MINSIZE,
-										 ALLOCSET_DEFAULT_INITSIZE,
-										 ALLOCSET_DEFAULT_MAXSIZE);
+										 ALLOCSET_DEFAULT_SIZES);
 		MemoryContextSwitchTo(work_cxt);
 
 		/************************************************************
@@ -3887,10 +3908,8 @@ hv_store_string(HV *hv, const char *key, SV *val)
 	hkey = pg_server_to_any(key, strlen(key), PG_UTF8);
 
 	/*
-	 * This seems nowhere documented, but under Perl 5.8.0 and up, hv_store()
-	 * recognizes a negative klen parameter as meaning a UTF-8 encoded key. It
-	 * does not appear that hashes track UTF-8-ness of keys at all in Perl
-	 * 5.6.
+	 * hv_store() recognizes a negative klen parameter as meaning a UTF-8
+	 * encoded key.
 	 */
 	hlen = -(int) strlen(hkey);
 	ret = hv_store(hv, hkey, hlen, val, 0);
@@ -3959,7 +3978,7 @@ plperl_inline_callback(void *arg)
 
 
 /*
- * Perl's own setlocal() copied from POSIX.xs
+ * Perl's own setlocale(), copied from POSIX.xs
  * (needed because of the calls to new_*())
  */
 #ifdef WIN32

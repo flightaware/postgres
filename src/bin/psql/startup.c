@@ -26,7 +26,7 @@
 #include "help.h"
 #include "input.h"
 #include "mainloop.h"
-#include "print.h"
+#include "fe_utils/print.h"
 #include "settings.h"
 
 
@@ -103,7 +103,8 @@ main(int argc, char *argv[])
 {
 	struct adhoc_opts options;
 	int			successResult;
-	char	   *password = NULL;
+	bool		have_password = false;
+	char		password[100];
 	char	   *password_prompt = NULL;
 	bool		new_pass;
 
@@ -135,6 +136,7 @@ main(int argc, char *argv[])
 	pset.queryFout = stdout;
 	pset.queryFoutPipe = false;
 	pset.copyStream = NULL;
+	pset.last_error_result = NULL;
 	pset.cur_cmd_source = stdin;
 	pset.cur_cmd_interactive = false;
 
@@ -209,7 +211,10 @@ main(int argc, char *argv[])
 								   options.username);
 
 	if (pset.getPassword == TRI_YES)
-		password = simple_prompt(password_prompt, 100, false);
+	{
+		simple_prompt(password_prompt, password, sizeof(password), false);
+		have_password = true;
+	}
 
 	/* loop until we have a password if requested by backend */
 	do
@@ -225,8 +230,8 @@ main(int argc, char *argv[])
 		keywords[2] = "user";
 		values[2] = options.username;
 		keywords[3] = "password";
-		values[3] = password;
-		keywords[4] = "dbname";
+		values[3] = have_password ? password : NULL;
+		keywords[4] = "dbname"; /* see do_connect() */
 		values[4] = (options.list_dbs && options.dbname == NULL) ?
 			"postgres" : options.dbname;
 		keywords[5] = "fallback_application_name";
@@ -243,16 +248,16 @@ main(int argc, char *argv[])
 
 		if (PQstatus(pset.db) == CONNECTION_BAD &&
 			PQconnectionNeedsPassword(pset.db) &&
-			password == NULL &&
+			!have_password &&
 			pset.getPassword != TRI_NO)
 		{
 			PQfinish(pset.db);
-			password = simple_prompt(password_prompt, 100, false);
+			simple_prompt(password_prompt, password, sizeof(password), false);
+			have_password = true;
 			new_pass = true;
 		}
 	} while (new_pass);
 
-	free(password);
 	free(password_prompt);
 
 	if (PQstatus(pset.db) == CONNECTION_BAD)
@@ -336,10 +341,10 @@ main(int argc, char *argv[])
 				if (pset.echo == PSQL_ECHO_ALL)
 					puts(cell->val);
 
-				scan_state = psql_scan_create();
+				scan_state = psql_scan_create(&psqlscan_callbacks);
 				psql_scan_setup(scan_state,
-								cell->val,
-								strlen(cell->val));
+								cell->val, strlen(cell->val),
+								pset.encoding, standard_strings());
 
 				successResult = HandleSlashCmds(scan_state, NULL) != PSQL_CMD_ERROR
 					? EXIT_SUCCESS : EXIT_FAILURE;

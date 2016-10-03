@@ -36,6 +36,7 @@
 #include "catalog/pg_am.h"
 #include "catalog/pg_collation.h"
 #include "catalog/pg_constraint.h"
+#include "catalog/pg_constraint_fn.h"
 #include "catalog/pg_opclass.h"
 #include "catalog/pg_operator.h"
 #include "catalog/pg_type.h"
@@ -123,7 +124,7 @@ static void transformFKConstraints(CreateStmtContext *cxt,
 					   bool skipValidation,
 					   bool isAddConstraint);
 static void transformCheckConstraints(CreateStmtContext *cxt,
-						bool skipValidation);
+						  bool skipValidation);
 static void transformConstraintAttrs(CreateStmtContext *cxt,
 						 List *constraintList);
 static void transformColumnType(CreateStmtContext *cxt, ColumnDef *column);
@@ -286,15 +287,15 @@ transformCreateStmt(CreateStmt *stmt, const char *queryString)
 	if (like_found)
 	{
 		/*
-		 * To match INHERITS, the existence of any LIKE table with OIDs
-		 * causes the new table to have oids.  For the same reason,
-		 * WITH/WITHOUT OIDs is also ignored with LIKE.  We prepend
-		 * because the first oid option list entry is honored.  Our
-		 * prepended WITHOUT OIDS clause will be overridden if an
-		 * inherited table has oids.
+		 * To match INHERITS, the existence of any LIKE table with OIDs causes
+		 * the new table to have oids.  For the same reason, WITH/WITHOUT OIDs
+		 * is also ignored with LIKE.  We prepend because the first oid option
+		 * list entry is honored.  Our prepended WITHOUT OIDS clause will be
+		 * overridden if an inherited table has oids.
 		 */
 		stmt->options = lcons(makeDefElem("oids",
-							  (Node *)makeInteger(cxt.hasoids)), stmt->options);
+									  (Node *) makeInteger(cxt.hasoids), -1),
+							  stmt->options);
 	}
 
 	foreach(elements, stmt->tableElts)
@@ -304,6 +305,7 @@ transformCreateStmt(CreateStmt *stmt, const char *queryString)
 		if (nodeTag(element) == T_Constraint)
 			transformTableConstraint(&cxt, (Constraint *) element);
 	}
+
 	/*
 	 * transformIndexConstraints wants cxt.alist to contain only index
 	 * statements, so transfer anything we already have into save_alist.
@@ -481,7 +483,7 @@ transformColumnDefinition(CreateStmtContext *cxt, ColumnDef *column)
 								 makeString(cxt->relation->relname),
 								 makeString(column->colname));
 		altseqstmt->options = list_make1(makeDefElem("owned_by",
-													 (Node *) attnamelist));
+												  (Node *) attnamelist, -1));
 
 		cxt->alist = lappend(cxt->alist, altseqstmt);
 
@@ -1142,7 +1144,9 @@ generateClonedIndexStmt(CreateStmtContext *cxt, Relation source_idx,
 
 	/*
 	 * We don't try to preserve the name of the source index; instead, just
-	 * let DefineIndex() choose a reasonable name.
+	 * let DefineIndex() choose a reasonable name.  (If we tried to preserve
+	 * the name, we'd get duplicate-relation-name failures unless the source
+	 * table was in a different schema.)
 	 */
 	index->idxname = NULL;
 
@@ -1708,7 +1712,7 @@ transformIndexConstraint(Constraint *constraint, CreateStmtContext *cxt)
 		 * else dump and reload will produce a different index (breaking
 		 * pg_upgrade in particular).
 		 */
-		if (index_rel->rd_rel->relam != get_am_oid(DEFAULT_INDEX_TYPE, false))
+		if (index_rel->rd_rel->relam != get_index_am_oid(DEFAULT_INDEX_TYPE, false))
 			ereport(ERROR,
 					(errcode(ERRCODE_WRONG_OBJECT_TYPE),
 					 errmsg("index \"%s\" is not a btree", index_name),
@@ -1948,8 +1952,8 @@ transformCheckConstraints(CreateStmtContext *cxt, bool skipValidation)
 
 	/*
 	 * If creating a new table, we can safely skip validation of check
-	 * constraints, and nonetheless mark them valid.  (This will override
-	 * any user-supplied NOT VALID flag.)
+	 * constraints, and nonetheless mark them valid.  (This will override any
+	 * user-supplied NOT VALID flag.)
 	 */
 	if (skipValidation)
 	{
@@ -2102,17 +2106,11 @@ transformIndexStmt(Oid relid, IndexStmt *stmt, const char *queryString)
 
 			/*
 			 * transformExpr() should have already rejected subqueries,
-			 * aggregates, and window functions, based on the EXPR_KIND_ for
-			 * an index expression.
+			 * aggregates, window functions, and SRFs, based on the EXPR_KIND_
+			 * for an index expression.
 			 *
-			 * Also reject expressions returning sets; this is for consistency
-			 * with what transformWhereClause() checks for the predicate.
 			 * DefineIndex() will make more checks.
 			 */
-			if (expression_returns_set(ielem->expr))
-				ereport(ERROR,
-						(errcode(ERRCODE_DATATYPE_MISMATCH),
-						 errmsg("index expression cannot return a set")));
 		}
 	}
 
@@ -2590,12 +2588,6 @@ transformAlterTableStmt(Oid relid, AlterTableStmt *stmt,
 						def->cooked_default =
 							transformExpr(pstate, def->raw_default,
 										  EXPR_KIND_ALTER_COL_TRANSFORM);
-
-						/* it can't return a set */
-						if (expression_returns_set(def->cooked_default))
-							ereport(ERROR,
-									(errcode(ERRCODE_DATATYPE_MISMATCH),
-									 errmsg("transform expression must not return a set")));
 					}
 
 					newcmds = lappend(newcmds, cmd);

@@ -42,7 +42,7 @@ ginCombineData(RBNode *existing, const RBNode *newdata, void *arg)
 			ereport(ERROR,
 					(errcode(ERRCODE_PROGRAM_LIMIT_EXCEEDED),
 					 errmsg("posting list is too long"),
-					 errhint("Reduce maintenance_work_mem")));
+					 errhint("Reduce maintenance_work_mem.")));
 
 		accum->allocatedMemory -= GetMemoryChunkSpace(eo->list);
 		eo->maxcount *= 2;
@@ -255,7 +255,7 @@ qsortCompareItemPointers(const void *a, const void *b)
 void
 ginBeginBAScan(BuildAccumulator *accum)
 {
-	rb_begin_iterate(accum->tree, LeftRightWalk);
+	rb_begin_iterate(accum->tree, LeftRightWalk, &accum->tree_walk);
 }
 
 /*
@@ -271,7 +271,7 @@ ginGetBAEntry(BuildAccumulator *accum,
 	GinEntryAccumulator *entry;
 	ItemPointerData *list;
 
-	entry = (GinEntryAccumulator *) rb_iterate(accum->tree);
+	entry = (GinEntryAccumulator *) rb_iterate(&accum->tree_walk);
 
 	if (entry == NULL)
 		return NULL;			/* no more entries */

@@ -31,7 +31,7 @@
 
 # This file is not intended to be compiled standalone, as it
 # assumes rules from other files.  In the tz distribution, use
-# 'make posix_packrat' to compile this file.
+# 'make PACKRATDATA=backzone zones' to compile and install this file.
 
 # Zones are sorted by zone name.  Each zone is preceded by the
 # name of the country that the zone is in, along with any other
@@ -279,6 +279,11 @@ Zone	America/Aruba	-4:40:24 -	LMT	1912 Feb 12 # Oranjestad
 			-4:30	-	ANT	1965 # Netherlands Antilles Time
 			-4:00	-	AST
 
+# Cayman Is
+Zone	America/Cayman	-5:25:32 -	LMT	1890     # Georgetown
+			-5:07:11 -	KMT	1912 Feb # Kingston Mean Time
+			-5:00	-	EST
+
 # Canada
 Zone America/Coral_Harbour -5:32:40 -	LMT	1884
 			-5:00	NT_YK	E%sT	1946
@@ -390,7 +395,7 @@ Zone America/Tortola	-4:18:28 -	LMT	1911 Jul # Road Town
 			-4:00	-	AST
 
 # McMurdo, Ross Island, since 1955-12
-Zone Antarctica/McMurdo	0	-	zzz	1956
+Zone Antarctica/McMurdo	0	-	-00	1956
 			12:00	NZ	NZ%sT
 Link Antarctica/McMurdo Antarctica/South_Pole
 

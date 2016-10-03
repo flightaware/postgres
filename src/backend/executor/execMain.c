@@ -79,7 +79,7 @@ static void ExecutePlan(EState *estate, PlanState *planstate,
 			bool use_parallel_mode,
 			CmdType operation,
 			bool sendTuples,
-			long numberTuples,
+			uint64 numberTuples,
 			ScanDirection direction,
 			DestReceiver *dest);
 static bool ExecCheckRTEPerms(RangeTblEntry *rte);
@@ -278,7 +278,7 @@ standard_ExecutorStart(QueryDesc *queryDesc, int eflags)
  */
 void
 ExecutorRun(QueryDesc *queryDesc,
-			ScanDirection direction, long count)
+			ScanDirection direction, uint64 count)
 {
 	if (ExecutorRun_hook)
 		(*ExecutorRun_hook) (queryDesc, direction, count);
@@ -288,7 +288,7 @@ ExecutorRun(QueryDesc *queryDesc,
 
 void
 standard_ExecutorRun(QueryDesc *queryDesc,
-					 ScanDirection direction, long count)
+					 ScanDirection direction, uint64 count)
 {
 	EState	   *estate;
 	CmdType		operation;
@@ -1245,6 +1245,7 @@ InitResultRelInfo(ResultRelInfo *resultRelInfo,
 	else
 		resultRelInfo->ri_FdwRoutine = NULL;
 	resultRelInfo->ri_FdwState = NULL;
+	resultRelInfo->ri_usesFdwDirectModify = false;
 	resultRelInfo->ri_ConstraintExprs = NULL;
 	resultRelInfo->ri_junkFilter = NULL;
 	resultRelInfo->ri_projectReturning = NULL;
@@ -1521,12 +1522,12 @@ ExecutePlan(EState *estate,
 			bool use_parallel_mode,
 			CmdType operation,
 			bool sendTuples,
-			long numberTuples,
+			uint64 numberTuples,
 			ScanDirection direction,
 			DestReceiver *dest)
 {
 	TupleTableSlot *slot;
-	long		current_tuple_count;
+	uint64		current_tuple_count;
 
 	/*
 	 * initialize local variables
@@ -1542,7 +1543,7 @@ ExecutePlan(EState *estate,
 	 * If a tuple count was supplied, we must force the plan to run without
 	 * parallelism, because we might exit early.
 	 */
-	if (numberTuples != 0)
+	if (numberTuples)
 		use_parallel_mode = false;
 
 	/*
@@ -1592,7 +1593,15 @@ ExecutePlan(EState *estate,
 		 * practice, this is probably always the case at this point.)
 		 */
 		if (sendTuples)
-			(*dest->receiveSlot) (slot, dest);
+		{
+			/*
+			 * If we are not able to send the tuple, we assume the destination
+			 * has closed and no more tuples can be sent. If that's the case,
+			 * end the loop.
+			 */
+			if (!((*dest->receiveSlot) (slot, dest)))
+				break;
+		}
 
 		/*
 		 * Count tuples processed, if this is a SELECT.  (For other operation
@@ -1842,25 +1851,25 @@ ExecWithCheckOptions(WCOKind kind, ResultRelInfo *resultRelInfo,
 					if (wco->polname != NULL)
 						ereport(ERROR,
 								(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
-							 errmsg("new row violates row-level security policy \"%s\" for table \"%s\"",
-									wco->polname, wco->relname)));
+								 errmsg("new row violates row-level security policy \"%s\" for table \"%s\"",
+										wco->polname, wco->relname)));
 					else
 						ereport(ERROR,
 								(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
-							 errmsg("new row violates row-level security policy for table \"%s\"",
-									wco->relname)));
+								 errmsg("new row violates row-level security policy for table \"%s\"",
+										wco->relname)));
 					break;
 				case WCO_RLS_CONFLICT_CHECK:
 					if (wco->polname != NULL)
 						ereport(ERROR,
 								(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
-							 errmsg("new row violates row-level security policy \"%s\" (USING expression) for table \"%s\"",
-									wco->polname, wco->relname)));
+								 errmsg("new row violates row-level security policy \"%s\" (USING expression) for table \"%s\"",
+										wco->polname, wco->relname)));
 					else
 						ereport(ERROR,
 								(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
-							 errmsg("new row violates row-level security policy (USING expression) for table \"%s\"",
-									wco->relname)));
+								 errmsg("new row violates row-level security policy (USING expression) for table \"%s\"",
+										wco->relname)));
 					break;
 				default:
 					elog(ERROR, "unrecognized WCO kind: %u", wco->kind);

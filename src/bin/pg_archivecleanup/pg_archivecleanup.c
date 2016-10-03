@@ -106,8 +106,8 @@ CleanupPriorWALFiles(void)
 		{
 			/*
 			 * Truncation is essentially harmless, because we skip names of
-			 * length other than XLOG_FNAME_LEN.  (In principle, one
-			 * could use a 1000-character additional_ext and get trouble.)
+			 * length other than XLOG_FNAME_LEN.  (In principle, one could use
+			 * a 1000-character additional_ext and get trouble.)
 			 */
 			strlcpy(walfile, xlde->d_name, MAXPGPATH);
 			TrimExtension(walfile, additional_ext);
@@ -314,7 +314,7 @@ main(int argc, char **argv)
 				dryrun = true;
 				break;
 			case 'x':
-				additional_ext = strdup(optarg);		/* Extension to remove
+				additional_ext = pg_strdup(optarg);		/* Extension to remove
 														 * from xlogfile names */
 				break;
 			default:

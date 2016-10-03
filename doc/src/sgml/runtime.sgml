@@ -183,6 +183,15 @@ postgres$ <userinput>initdb -D /usr/local/pgsql/data</userinput>
    locale setting.  For details see <xref linkend="multibyte">.
   </para>
 
+  <para>
+   Non-<literal>C</> and non-<literal>POSIX</> locales rely on the
+   operating system's collation library for character set ordering.
+   This controls the ordering of keys stored in indexes.  For this reason,
+   a cluster cannot switch to an incompatible collation library version,
+   either through snapshot restore, binary streaming replication, a
+   different operating system, or an operating system upgrade.
+  </para>
+
   <sect2 id="creating-cluster-mount-points">
    <title>Use of Secondary File Systems</title>
 
@@ -368,6 +377,41 @@ fi
       or <filename>/etc/rc.local</filename> or look at the file
       <filename>contrib/start-scripts/linux</filename> in the
       <productname>PostgreSQL</productname> source distribution.
+     </para>
+
+     <para>
+      When using <application>systemd</application>, you can use the following
+      service unit file (e.g.,
+      at <filename>/etc/systemd/system/postgresql.service</filename>):<indexterm><primary>systemd</primary></indexterm>
+<programlisting>
+[Unit]
+Description=PostgreSQL database server
+Documentation=man:postgres(1)
+
+[Service]
+Type=notify
+User=postgres
+ExecStart=/usr/local/pgsql/bin/postgres -D /usr/local/pgsql/data
+ExecReload=/bin/kill -HUP $MAINPID
+KillMode=mixed
+KillSignal=SIGINT
+TimeoutSec=0
+
+[Install]
+WantedBy=multi-user.target
+</programlisting>
+      Using <literal>Type=notify</literal> requires that the server binary was
+      built with <literal>configure --with-systemd</literal>.
+     </para>
+
+     <para>
+      Consider carefully the timeout
+      setting.  <application>systemd</application> has a default timeout of 90
+      seconds as of this writing and will kill a process that does not notify
+      readiness within that time.  But a <productname>PostgreSQL</productname>
+      server that might have to perform crash recovery at startup could take
+      much longer to become ready.  The suggested value of 0 disables the
+      timeout logic.
      </para>
     </listitem>
 
@@ -645,13 +689,13 @@ psql: could not connect to server: No such file or directory
        <row>
         <entry><varname>SEMMNI</></>
         <entry>Maximum number of semaphore identifiers (i.e., sets)</>
-        <entry>at least <literal>ceil((max_connections + autovacuum_max_workers + 4) / 16)</literal></>
+        <entry>at least <literal>ceil((max_connections + autovacuum_max_workers + max_worker_processes + 5) / 16)</literal></>
        </row>
 
        <row>
         <entry><varname>SEMMNS</></>
         <entry>Maximum number of semaphores system-wide</>
-        <entry><literal>ceil((max_connections + autovacuum_max_workers + 4) / 16) * 17</literal> plus room for other applications</>
+        <entry><literal>ceil((max_connections + autovacuum_max_workers + max_worker_processes + 5) / 16) * 17</literal> plus room for other applications</>
        </row>
 
        <row>
@@ -699,20 +743,22 @@ psql: could not connect to server: No such file or directory
 
    <para>
     <productname>PostgreSQL</> uses one semaphore per allowed connection
-    (<xref linkend="guc-max-connections">) and allowed autovacuum worker
-    process (<xref linkend="guc-autovacuum-max-workers">), in sets of 16.
+    (<xref linkend="guc-max-connections">), allowed autovacuum worker process
+    (<xref linkend="guc-autovacuum-max-workers">) and allowed background
+    process (<xref linkend="guc-max-worker-processes">), in sets of 16.
     Each such set will
     also contain a 17th semaphore which contains a <quote>magic
     number</quote>, to detect collision with semaphore sets used by
     other applications. The maximum number of semaphores in the system
     is set by <varname>SEMMNS</>, which consequently must be at least
     as high as <varname>max_connections</> plus
-    <varname>autovacuum_max_workers</>, plus one extra for each 16
+    <varname>autovacuum_max_workers</> plus <varname>max_worker_processes</>,
+    plus one extra for each 16
     allowed connections plus workers (see the formula in <xref
     linkend="sysvipc-parameters">).  The parameter <varname>SEMMNI</>
     determines the limit on the number of semaphore sets that can
     exist on the system at one time.  Hence this parameter must be at
-    least <literal>ceil((max_connections + autovacuum_max_workers + 4) / 16)</>.
+    least <literal>ceil((max_connections + autovacuum_max_workers + max_worker_processes + 5) / 16)</>.
     Lowering the number
     of allowed connections is a temporary workaround for failures,
     which are usually confusingly worded <quote>No space
@@ -960,12 +1006,12 @@ option        SEMMAP=256
 
 
      <varlistentry>
-      <term><systemitem class="osname">OS X</>
-      <indexterm><primary>OS X</><secondary>IPC configuration</></>
+      <term><systemitem class="osname">macOS</>
+      <indexterm><primary>macOS</><secondary>IPC configuration</></>
       </term>
       <listitem>
        <para>
-        The recommended method for configuring shared memory in OS X
+        The recommended method for configuring shared memory in macOS
         is to create a file named <filename>/etc/sysctl.conf</>,
         containing variable assignments such as:
 <programlisting>
@@ -975,13 +1021,13 @@ kern.sysv.shmmni=32
 kern.sysv.shmseg=8
 kern.sysv.shmall=1024
 </programlisting>
-        Note that in some OS X versions,
+        Note that in some macOS versions,
         <emphasis>all five</> shared-memory parameters must be set in
         <filename>/etc/sysctl.conf</>, else the values will be ignored.
        </para>
 
        <para>
-        Beware that recent releases of OS X ignore attempts to set
+        Beware that recent releases of macOS ignore attempts to set
         <varname>SHMMAX</> to a value that isn't an exact multiple of 4096.
        </para>
 
@@ -990,7 +1036,7 @@ kern.sysv.shmall=1024
        </para>
 
        <para>
-        In older OS X versions, you will need to reboot to have changes in the
+        In older macOS versions, you will need to reboot to have changes in the
         shared memory parameters take effect.  As of 10.5 it is possible to
         change all but <varname>SHMMNI</> on the fly, using
         <application>sysctl</>.  But it's still best to set up your preferred
@@ -999,7 +1045,7 @@ kern.sysv.shmall=1024
        </para>
 
        <para>
-        The file <filename>/etc/sysctl.conf</> is only honored in OS X
+        The file <filename>/etc/sysctl.conf</> is only honored in macOS
         10.3.9 and later.  If you are running a previous 10.3.x release,
         you must edit the file <filename>/etc/rc</>
         and change the values in the following commands:
@@ -1011,12 +1057,12 @@ sysctl -w kern.sysv.shmseg
 sysctl -w kern.sysv.shmall
 </programlisting>
         Note that
-        <filename>/etc/rc</> is usually overwritten by OS X system updates,
+        <filename>/etc/rc</> is usually overwritten by macOS system updates,
         so you should expect to have to redo these edits after each update.
        </para>
 
        <para>
-        In OS X 10.2 and earlier, instead edit these commands in the file
+        In macOS 10.2 and earlier, instead edit these commands in the file
         <filename>/System/Library/StartupItems/SystemTuning/SystemTuning</>.
        </para>
       </listitem>
@@ -1555,17 +1601,26 @@ $ <userinput>kill -INT `head -1 /usr/local/pgsql/data/postmaster.pid`</userinput
   </para>
 
   <para>
-   <productname>PostgreSQL</> major versions are represented by the
-   first two digit groups of the version number, e.g., 8.4.
-   <productname>PostgreSQL</> minor versions are represented by the
-   third group of version digits, e.g., 8.4.2 is the second minor
-   release of 8.4.  Minor releases never change the internal storage
-   format and are always compatible with earlier and later minor
-   releases of the same major version number, e.g., 8.4.2 is compatible
-   with 8.4, 8.4.1 and 8.4.6.  To update between compatible versions,
-   you simply replace the executables while the server is down and
-   restart the server.  The data directory remains unchanged &mdash;
-   minor upgrades are that simple.
+   Current <productname>PostgreSQL</productname> version numbers consist of a
+   major and a minor version number.  For example, in the version number 10.1,
+   the 10 is the major version number and the 1 is the minor version number,
+   meaning this would be the first minor release of the major release 10.  For
+   releases before <productname>PostgreSQL</productname> version 10.0, version
+   numbers consist of three numbers, for example, 9.5.3.  In those cases, the
+   major version consists of the first two digit groups of the version number,
+   e.g., 9.5, and the minor version is the third number, e.g., 3, meaning this
+   would be the third minor release of the major release 9.5.
+  </para>
+
+  <para>
+   Minor releases never change the internal storage format and are always
+   compatible with earlier and later minor releases of the same major version
+   number.  For example, version 10.1 is compatible with version 10.0 and
+   version 10.6.  Similarly, for example, 9.5.3 is compatible with 9.5.0,
+   9.5.1, and 9.5.6.  To update between compatible versions, you simply
+   replace the executables while the server is down and restart the server.
+   The data directory remains unchanged &mdash; minor upgrades are that
+   simple.
   </para>
 
   <para>
@@ -1867,7 +1922,7 @@ pg_dumpall -p 5432 | psql -d postgres -p 5433
   </para>
 
   <para>
-   The simplest way to prevent spoofing for <literal>local</>
+   One way to prevent spoofing of <literal>local</>
    connections is to use a Unix domain socket directory (<xref
    linkend="guc-unix-socket-directories">) that has write permission only
    for a trusted local user.  This prevents a malicious user from creating
@@ -1877,6 +1932,13 @@ pg_dumpall -p 5432 | psql -d postgres -p 5433
    startup create a symbolic link <filename>/tmp/.s.PGSQL.5432</> that points
    to the relocated socket file.  You also might need to modify your
    <filename>/tmp</> cleanup script to prevent removal of the symbolic link.
+  </para>
+
+  <para>
+   Another option for <literal>local</> connections is for clients to use
+   <link linkend="libpq-connect-requirepeer"><literal>requirepeer</></>
+   to specify the required owner of the server process connected to
+   the socket.
   </para>
 
   <para>
@@ -2110,9 +2172,20 @@ pg_dumpall -p 5432 | psql -d postgres -p 5433
    the server's data directory, but other names and locations can be specified
    using the configuration parameters <xref linkend="guc-ssl-cert-file">
    and <xref linkend="guc-ssl-key-file">.
+  </para>
+
+  <para>
    On Unix systems, the permissions on <filename>server.key</filename> must
    disallow any access to world or group; achieve this by the command
-   <command>chmod 0600 server.key</command>.
+   <command>chmod 0600 server.key</command>.  Alternatively, the file can be
+   owned by root and have group read access (that is, <literal>0640</literal>
+   permissions).  That setup is intended for installations where certificate
+   and key files are managed by the operating system.  The user under which
+   the <productname>PostgreSQL</productname> server runs should then be made a
+   member of the group that has access to those certificate and key files.
+  </para>
+
+  <para>
    If the private key is protected with a passphrase, the
    server will prompt for the passphrase and will not start until it has
    been entered.
@@ -2132,20 +2205,23 @@ pg_dumpall -p 5432 | psql -d postgres -p 5433
   <sect2 id="ssl-client-certificates">
    <title>Using Client Certificates</title>
 
-   <para>
+  <para>
    To require the client to supply a trusted certificate, place
    certificates of the certificate authorities (<acronym>CA</acronym>s)
    you trust in the file <filename>root.crt</filename> in the data
    directory, set the parameter <xref linkend="guc-ssl-ca-file"> in
    <filename>postgresql.conf</filename> to <literal>root.crt</literal>,
-   and set the <literal>clientcert</literal> parameter
-   to 1 on the appropriate <literal>hostssl</> line(s) in
-   <filename>pg_hba.conf</>.
+   and add the authentication option <literal>clientcert=1</literal> to the
+   appropriate <literal>hostssl</> line(s) in <filename>pg_hba.conf</>.
    A certificate will then be requested from the client during
    SSL connection startup.  (See <xref linkend="libpq-ssl"> for a
    description of how to set up certificates on the client.)  The server will
    verify that the client's certificate is signed by one of the trusted
-   certificate authorities.  If intermediate <acronym>CA</>s appear in
+   certificate authorities.
+  </para>
+
+  <para>
+   If intermediate <acronym>CA</>s appear in
    <filename>root.crt</filename>, the file must also contain certificate
    chains to their root <acronym>CA</>s.  Certificate Revocation List
    (CRL) entries
@@ -2157,12 +2233,12 @@ pg_dumpall -p 5432 | psql -d postgres -p 5433
   </para>
 
   <para>
-   The <literal>clientcert</literal> option in <filename>pg_hba.conf</> is
-   available for all authentication methods, but only for rows specified as
-   <literal>hostssl</>.  When <literal>clientcert</literal> is not specified
-   or is set to 0, the server will still verify presented client
-   certificates against its CA list, if one is configured,
-   &mdash; but it will not insist that a client certificate be presented.
+   The <literal>clientcert</literal> authentication option is available for
+   all authentication methods, but only in <filename>pg_hba.conf</> lines
+   specified as <literal>hostssl</>.  When <literal>clientcert</literal> is
+   not specified or is set to 0, the server will still verify any presented
+   client certificates against its CA file, if one is configured &mdash; but
+   it will not insist that a client certificate be presented.
   </para>
 
   <para>
@@ -2177,7 +2253,9 @@ pg_dumpall -p 5432 | psql -d postgres -p 5433
    If you are setting up client certificates, you may wish to use
    the <literal>cert</> authentication method, so that the certificates
    control user authentication as well as providing connection security.
-   See <xref linkend="auth-cert"> for details.
+   See <xref linkend="auth-cert"> for details.  (It is not necessary to
+   specify <literal>clientcert=1</literal> explicitly when using
+   the <literal>cert</> authentication method.)
   </para>
   </sect2>
 

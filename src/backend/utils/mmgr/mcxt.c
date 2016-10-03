@@ -91,16 +91,13 @@ MemoryContextInit(void)
 	AssertState(TopMemoryContext == NULL);
 
 	/*
-	 * Initialize TopMemoryContext as an AllocSetContext with slow growth rate
-	 * --- we don't really expect much to be allocated in it.
-	 *
-	 * (There is special-case code in MemoryContextCreate() for this call.)
+	 * First, initialize TopMemoryContext, which will hold the MemoryContext
+	 * nodes for all other contexts.  (There is special-case code in
+	 * MemoryContextCreate() to handle this call.)
 	 */
 	TopMemoryContext = AllocSetContextCreate((MemoryContext) NULL,
 											 "TopMemoryContext",
-											 0,
-											 8 * 1024,
-											 8 * 1024);
+											 ALLOCSET_DEFAULT_SIZES);
 
 	/*
 	 * Not having any other place to point CurrentMemoryContext, make it point
@@ -1051,10 +1048,13 @@ repalloc(void *pointer, Size size)
 
 	ret = (*context->methods->realloc) (context, pointer, size);
 	if (ret == NULL)
+	{
+		MemoryContextStats(TopMemoryContext);
 		ereport(ERROR,
 				(errcode(ERRCODE_OUT_OF_MEMORY),
 				 errmsg("out of memory"),
 				 errdetail("Failed on request of size %zu.", size)));
+	}
 
 	VALGRIND_MEMPOOL_CHANGE(context, pointer, ret, size);
 
@@ -1131,10 +1131,13 @@ repalloc_huge(void *pointer, Size size)
 
 	ret = (*context->methods->realloc) (context, pointer, size);
 	if (ret == NULL)
+	{
+		MemoryContextStats(TopMemoryContext);
 		ereport(ERROR,
 				(errcode(ERRCODE_OUT_OF_MEMORY),
 				 errmsg("out of memory"),
 				 errdetail("Failed on request of size %zu.", size)));
+	}
 
 	VALGRIND_MEMPOOL_CHANGE(context, pointer, ret, size);
 

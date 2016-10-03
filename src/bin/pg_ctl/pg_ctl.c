@@ -19,6 +19,8 @@
 
 #include "postgres_fe.h"
 
+#include "catalog/pg_control.h"
+#include "common/controldata_utils.h"
 #include "libpq-fe.h"
 #include "pqexpbuffer.h"
 
@@ -72,6 +74,7 @@ typedef enum
 static bool do_wait = false;
 static bool wait_set = false;
 static int	wait_seconds = DEFAULT_WAIT;
+static bool wait_seconds_arg = false;
 static bool silent_mode = false;
 static ShutdownMode shutdown_mode = FAST_MODE;
 static int	sig = SIGINT;		/* default */
@@ -95,7 +98,6 @@ static char postopts_file[MAXPGPATH];
 static char version_file[MAXPGPATH];
 static char pid_file[MAXPGPATH];
 static char backup_file[MAXPGPATH];
-static char recovery_file[MAXPGPATH];
 static char promote_file[MAXPGPATH];
 
 #ifdef WIN32
@@ -157,6 +159,8 @@ static bool postmaster_is_alive(pid_t pid);
 static void unlimit_core_size(void);
 #endif
 
+static DBState get_control_dbstate(void);
+
 
 #ifdef WIN32
 static void
@@ -209,7 +213,7 @@ write_stderr(const char *fmt,...)
 	 * On Win32, we print to stderr if running on a console, or write to
 	 * eventlog if running as a service
 	 */
-	if (!pgwin32_is_service())	/* Running as a service */
+	if (pgwin32_is_service())	/* Running as a service */
 	{
 		char		errbuf[2048];		/* Arbitrary size? */
 
@@ -987,12 +991,12 @@ do_stop(void)
 		/*
 		 * If backup_label exists, an online backup is running. Warn the user
 		 * that smart shutdown will wait for it to finish. However, if
-		 * recovery.conf is also present, we're recovering from an online
+		 * the server is in archive recovery, we're recovering from an online
 		 * backup instead of performing one.
 		 */
 		if (shutdown_mode == SMART_MODE &&
 			stat(backup_file, &statbuf) == 0 &&
-			stat(recovery_file, &statbuf) != 0)
+			get_control_dbstate() != DB_IN_ARCHIVE_RECOVERY)
 		{
 			print_msg(_("WARNING: online backup mode is active\n"
 						"Shutdown will not complete until pg_stop_backup() is called.\n\n"));
@@ -1075,12 +1079,12 @@ do_restart(void)
 		/*
 		 * If backup_label exists, an online backup is running. Warn the user
 		 * that smart shutdown will wait for it to finish. However, if
-		 * recovery.conf is also present, we're recovering from an online
+		 * the server is in archive recovery, we're recovering from an online
 		 * backup instead of performing one.
 		 */
 		if (shutdown_mode == SMART_MODE &&
 			stat(backup_file, &statbuf) == 0 &&
-			stat(recovery_file, &statbuf) != 0)
+			get_control_dbstate() != DB_IN_ARCHIVE_RECOVERY)
 		{
 			print_msg(_("WARNING: online backup mode is active\n"
 						"Shutdown will not complete until pg_stop_backup() is called.\n\n"));
@@ -1167,7 +1171,6 @@ do_promote(void)
 {
 	FILE	   *prmfile;
 	pgpid_t		pid;
-	struct stat statbuf;
 
 	pid = get_pgpid(false);
 
@@ -1186,8 +1189,7 @@ do_promote(void)
 		exit(1);
 	}
 
-	/* If recovery.conf doesn't exist, the server is not in standby mode */
-	if (stat(recovery_file, &statbuf) != 0)
+	if (get_control_dbstate() != DB_IN_ARCHIVE_RECOVERY)
 	{
 		write_stderr(_("%s: cannot promote server; "
 					   "server is not in standby mode\n"),
@@ -1226,7 +1228,34 @@ do_promote(void)
 		exit(1);
 	}
 
-	print_msg(_("server promoting\n"));
+	if (do_wait)
+	{
+		DBState state = DB_STARTUP;
+
+		print_msg(_("waiting for server to promote..."));
+		while (wait_seconds > 0)
+		{
+			state = get_control_dbstate();
+			if (state == DB_IN_PRODUCTION)
+				break;
+
+			print_msg(".");
+			pg_usleep(1000000);     /* 1 sec */
+			wait_seconds--;
+		}
+		if (state == DB_IN_PRODUCTION)
+		{
+			print_msg(_(" done\n"));
+			print_msg(_("server promoted\n"));
+		}
+		else
+		{
+			print_msg(_(" stopped waiting\n"));
+			print_msg(_("server is still promoting\n"));
+		}
+	}
+	else
+		print_msg(_("server promoting\n"));
 }
 
 
@@ -1431,7 +1460,8 @@ pgwin32_CommandLine(bool registration)
 	if (registration && do_wait)
 		appendPQExpBuffer(cmdLine, " -w");
 
-	if (registration && wait_seconds != DEFAULT_WAIT)
+	/* Don't propagate a value from an environment variable. */
+	if (registration && wait_seconds_arg && wait_seconds != DEFAULT_WAIT)
 		appendPQExpBuffer(cmdLine, " -t %d", wait_seconds);
 
 	if (registration && silent_mode)
@@ -1745,8 +1775,8 @@ CreateRestrictedProcess(char *cmd, PROCESS_INFORMATION *processInfo, bool as_ser
 	if (!OpenProcessToken(GetCurrentProcess(), TOKEN_ALL_ACCESS, &origToken))
 	{
 		/*
-		 * Most Windows targets make DWORD a 32-bit unsigned long, but
-		 * in case it doesn't cast DWORD before printing.
+		 * Most Windows targets make DWORD a 32-bit unsigned long, but in case
+		 * it doesn't cast DWORD before printing.
 		 */
 		write_stderr(_("%s: could not open process token: error code %lu\n"),
 					 progname, (unsigned long) GetLastError());
@@ -1911,9 +1941,9 @@ do_help(void)
 	printf(_("  %s stop    [-W] [-t SECS] [-D DATADIR] [-s] [-m SHUTDOWN-MODE]\n"), progname);
 	printf(_("  %s restart [-w] [-t SECS] [-D DATADIR] [-s] [-m SHUTDOWN-MODE]\n"
 			 "                 [-o \"OPTIONS\"]\n"), progname);
-	printf(_("  %s reload  [-D DATADIR] [-s]\n"), progname);
-	printf(_("  %s status  [-D DATADIR]\n"), progname);
-	printf(_("  %s promote [-D DATADIR] [-s]\n"), progname);
+	printf(_("  %s reload                 [-D DATADIR] [-s]\n"), progname);
+	printf(_("  %s status                 [-D DATADIR]\n"), progname);
+	printf(_("  %s promote [-w] [-t SECS] [-D DATADIR] [-s]\n"), progname);
 	printf(_("  %s kill    SIGNALNAME PID\n"), progname);
 #ifdef WIN32
 	printf(_("  %s register   [-N SERVICENAME] [-U USERNAME] [-P PASSWORD] [-D DATADIR]\n"
@@ -2113,6 +2143,25 @@ adjust_data_dir(void)
 }
 
 
+static DBState
+get_control_dbstate(void)
+{
+	DBState ret;
+	bool	crc_ok;
+	ControlFileData *control_file_data = get_controlfile(pg_data, progname, &crc_ok);
+
+	if (!crc_ok)
+	{
+		write_stderr(_("%s: control file appears to be corrupt\n"), progname);
+		exit(1);
+	}
+
+	ret = control_file_data->state;
+	pfree(control_file_data);
+	return ret;
+}
+
+
 int
 main(int argc, char **argv)
 {
@@ -2128,6 +2177,7 @@ main(int argc, char **argv)
 		{NULL, 0, NULL, 0}
 	};
 
+	char	   *env_wait;
 	int			option_index;
 	int			c;
 	pgpid_t		killproc = 0;
@@ -2177,6 +2227,10 @@ main(int argc, char **argv)
 		exit(1);
 	}
 #endif
+
+	env_wait = getenv("PGCTLTIMEOUT");
+	if (env_wait != NULL)
+		wait_seconds = atoi(env_wait);
 
 	/*
 	 * 'Action' can be before or after args so loop over both. Some
@@ -2255,6 +2309,7 @@ main(int argc, char **argv)
 					break;
 				case 't':
 					wait_seconds = atoi(optarg);
+					wait_seconds_arg = true;
 					break;
 				case 'U':
 					if (strchr(optarg, '\\'))
@@ -2367,18 +2422,10 @@ main(int argc, char **argv)
 
 	if (!wait_set)
 	{
-		switch (ctl_command)
-		{
-			case RESTART_COMMAND:
-			case START_COMMAND:
-				do_wait = false;
-				break;
-			case STOP_COMMAND:
-				do_wait = true;
-				break;
-			default:
-				break;
-		}
+		if (ctl_command == STOP_COMMAND)
+			do_wait = true;
+		else
+			do_wait = false;
 	}
 
 	if (ctl_command == RELOAD_COMMAND)
@@ -2393,7 +2440,6 @@ main(int argc, char **argv)
 		snprintf(version_file, MAXPGPATH, "%s/PG_VERSION", pg_data);
 		snprintf(pid_file, MAXPGPATH, "%s/postmaster.pid", pg_data);
 		snprintf(backup_file, MAXPGPATH, "%s/backup_label", pg_data);
-		snprintf(recovery_file, MAXPGPATH, "%s/recovery.conf", pg_data);
 	}
 
 	switch (ctl_command)

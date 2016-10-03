@@ -65,9 +65,7 @@ ResetUnloggedRelations(int op)
 	 */
 	tmpctx = AllocSetContextCreate(CurrentMemoryContext,
 								   "ResetUnloggedRelations",
-								   ALLOCSET_DEFAULT_MINSIZE,
-								   ALLOCSET_DEFAULT_INITSIZE,
-								   ALLOCSET_DEFAULT_MAXSIZE);
+								   ALLOCSET_DEFAULT_SIZES);
 	oldctx = MemoryContextSwitchTo(tmpctx);
 
 	/*
@@ -385,7 +383,7 @@ ResetUnloggedRelationsInDbspaceDir(const char *dbspacedirname, int op)
 
 		FreeDir(dbspace_dir);
 
-		fsync_fname((char *) dbspacedirname, true);
+		fsync_fname(dbspacedirname, true);
 	}
 }
 

@@ -391,6 +391,42 @@ ExecRenameStmt(RenameStmt *stmt)
 }
 
 /*
+ * Executes an ALTER OBJECT / DEPENDS ON [EXTENSION] statement.
+ *
+ * Return value is the address of the altered object.  refAddress is an output
+ * argument which, if not null, receives the address of the object that the
+ * altered object now depends on.
+ */
+ObjectAddress
+ExecAlterObjectDependsStmt(AlterObjectDependsStmt *stmt, ObjectAddress *refAddress)
+{
+	ObjectAddress address;
+	ObjectAddress refAddr;
+	Relation	rel;
+
+	address =
+		get_object_address_rv(stmt->objectType, stmt->relation, stmt->objname,
+							stmt->objargs, &rel, AccessExclusiveLock, false);
+
+	/*
+	 * If a relation was involved, it would have been opened and locked. We
+	 * don't need the relation here, but we'll retain the lock until commit.
+	 */
+	if (rel)
+		heap_close(rel, NoLock);
+
+	refAddr = get_object_address(OBJECT_EXTENSION, list_make1(stmt->extname),
+								 NULL, &rel, AccessExclusiveLock, false);
+	Assert(rel == NULL);
+	if (refAddress)
+		*refAddress = refAddr;
+
+	recordDependencyOn(&address, &refAddr, DEPENDENCY_AUTO_EXTENSION);
+
+	return address;
+}
+
+/*
  * Executes an ALTER OBJECT / SET SCHEMA statement.  Based on the object
  * type, the function appropriate to that type is executed.
  *
@@ -593,8 +629,8 @@ AlterObjectNamespace_internal(Relation rel, Oid objid, Oid nspOid)
 	oldNspOid = DatumGetObjectId(namespace);
 
 	/*
-	 * If the object is already in the correct namespace, we don't need
-	 * to do anything except fire the object access hook.
+	 * If the object is already in the correct namespace, we don't need to do
+	 * anything except fire the object access hook.
 	 */
 	if (oldNspOid == nspOid)
 	{
@@ -721,7 +757,6 @@ ExecAlterOwnerStmt(AlterOwnerStmt *stmt)
 		case OBJECT_TYPE:
 		case OBJECT_DOMAIN:		/* same as TYPE */
 			return AlterTypeOwner(stmt->object, newowner, stmt->objectType);
-			break;
 
 		case OBJECT_FDW:
 			return AlterForeignDataWrapperOwner(strVal(linitial(stmt->object)),

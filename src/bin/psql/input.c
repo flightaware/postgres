@@ -229,7 +229,7 @@ gets_fromFile(FILE *source)
 		}
 
 		/* EOL? */
-		if (buffer->data[buffer->len - 1] == '\n')
+		if (buffer->len > 0 && buffer->data[buffer->len - 1] == '\n')
 		{
 			buffer->data[buffer->len - 1] = '\0';
 			return pg_strdup(buffer->data);
@@ -411,7 +411,7 @@ saveHistory(char *fname, int max_lines)
 
 	/*
 	 * Suppressing the write attempt when HISTFILE is set to /dev/null may
-	 * look like a negligible optimization, but it's necessary on e.g. Darwin,
+	 * look like a negligible optimization, but it's necessary on e.g. macOS,
 	 * where write_history will fail because it tries to chmod the target
 	 * file.
 	 */

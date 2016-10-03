@@ -496,8 +496,8 @@ SerializationNeededForRead(Relation relation, Snapshot snapshot)
 	 * Don't acquire locks or conflict when scanning with a special snapshot.
 	 * This excludes things like CLUSTER and REINDEX. They use the wholesale
 	 * functions TransferPredicateLocksToHeapRelation() and
-	 * CheckTableForSerializableConflictIn() to participate serialization, but
-	 * the scans involved don't need serialization.
+	 * CheckTableForSerializableConflictIn() to participate in serialization,
+	 * but the scans involved don't need serialization.
 	 */
 	if (!IsMVCCSnapshot(snapshot))
 		return false;
@@ -795,7 +795,8 @@ OldSerXidInit(void)
 	 */
 	OldSerXidSlruCtl->PagePrecedes = OldSerXidPagePrecedesLogically;
 	SimpleLruInit(OldSerXidSlruCtl, "oldserxid",
-				  NUM_OLDSERXID_BUFFERS, 0, OldSerXidLock, "pg_serial");
+				  NUM_OLDSERXID_BUFFERS, 0, OldSerXidLock, "pg_serial",
+				  LWTRANCHE_OLDSERXID_BUFFERS);
 	/* Override default assumption that writes should be fsync'd */
 	OldSerXidSlruCtl->do_fsync = false;
 
@@ -1183,12 +1184,6 @@ InitPredicateLocks(void)
 		requestSize = mul_size((Size) max_table_size,
 							   PredXactListElementDataSize);
 		PredXact->element = ShmemAlloc(requestSize);
-		if (PredXact->element == NULL)
-			ereport(ERROR,
-					(errcode(ERRCODE_OUT_OF_MEMORY),
-			 errmsg("not enough shared memory for elements of data structure"
-					" \"%s\" (%zu bytes requested)",
-					"PredXactList", requestSize)));
 		/* Add all elements to available list, clean. */
 		memset(PredXact->element, 0, requestSize);
 		for (i = 0; i < max_table_size; i++)
@@ -1254,12 +1249,6 @@ InitPredicateLocks(void)
 		requestSize = mul_size((Size) max_table_size,
 							   RWConflictDataSize);
 		RWConflictPool->element = ShmemAlloc(requestSize);
-		if (RWConflictPool->element == NULL)
-			ereport(ERROR,
-					(errcode(ERRCODE_OUT_OF_MEMORY),
-			 errmsg("not enough shared memory for elements of data structure"
-					" \"%s\" (%zu bytes requested)",
-					"RWConflictPool", requestSize)));
 		/* Add all elements to available list, clean. */
 		memset(RWConflictPool->element, 0, requestSize);
 		for (i = 0; i < max_table_size; i++)

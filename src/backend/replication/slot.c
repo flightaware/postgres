@@ -138,7 +138,7 @@ ReplicationSlotsShmemInit(void)
 		ShmemInitStruct("ReplicationSlot Ctl", ReplicationSlotsShmemSize(),
 						&found);
 
-	ReplSlotIOLWLockTranche.name = "Replication Slot IO Locks";
+	ReplSlotIOLWLockTranche.name = "replication_slot_io";
 	ReplSlotIOLWLockTranche.array_base =
 		((char *) ReplicationSlotCtl) + offsetof(ReplicationSlotCtlData, replication_slots) +offsetof(ReplicationSlot, io_in_progress_lock);
 	ReplSlotIOLWLockTranche.array_stride = sizeof(ReplicationSlot);
@@ -230,11 +230,11 @@ ReplicationSlotCreate(const char *name, bool db_specific,
 	ReplicationSlotValidateName(name, ERROR);
 
 	/*
-	 * If some other backend ran this code concurrently with us, we'd likely both
-	 * allocate the same slot, and that would be bad.  We'd also be at risk of
-	 * missing a name collision.  Also, we don't want to try to create a new
-	 * slot while somebody's busy cleaning up an old one, because we might
-	 * both be monkeying with the same directory.
+	 * If some other backend ran this code concurrently with us, we'd likely
+	 * both allocate the same slot, and that would be bad.  We'd also be at
+	 * risk of missing a name collision.  Also, we don't want to try to create
+	 * a new slot while somebody's busy cleaning up an old one, because we
+	 * might both be monkeying with the same directory.
 	 */
 	LWLockAcquire(ReplicationSlotAllocationLock, LW_EXCLUSIVE);
 
@@ -272,12 +272,22 @@ ReplicationSlotCreate(const char *name, bool db_specific,
 	 */
 	Assert(!slot->in_use);
 	Assert(slot->active_pid == 0);
-	slot->data.persistency = persistency;
-	slot->data.xmin = InvalidTransactionId;
-	slot->effective_xmin = InvalidTransactionId;
+
+	/* first initialize persistent data */
+	memset(&slot->data, 0, sizeof(ReplicationSlotPersistentData));
 	StrNCpy(NameStr(slot->data.name), name, NAMEDATALEN);
 	slot->data.database = db_specific ? MyDatabaseId : InvalidOid;
-	slot->data.restart_lsn = InvalidXLogRecPtr;
+	slot->data.persistency = persistency;
+
+	/* and then data only present in shared memory */
+	slot->just_dirtied = false;
+	slot->dirty = false;
+	slot->effective_xmin = InvalidTransactionId;
+	slot->effective_catalog_xmin = InvalidTransactionId;
+	slot->candidate_catalog_xmin = InvalidTransactionId;
+	slot->candidate_xmin_lsn = InvalidXLogRecPtr;
+	slot->candidate_restart_valid = InvalidXLogRecPtr;
+	slot->candidate_restart_lsn = InvalidXLogRecPtr;
 
 	/*
 	 * Create the slot on disk.  We haven't actually marked the slot allocated
@@ -352,8 +362,8 @@ ReplicationSlotAcquire(const char *name)
 	if (active_pid != 0)
 		ereport(ERROR,
 				(errcode(ERRCODE_OBJECT_IN_USE),
-			   errmsg("replication slot \"%s\" is already active for PID %d",
-					  name, active_pid)));
+				 errmsg("replication slot \"%s\" is active for PID %d",
+						name, active_pid)));
 
 	/* We made this slot active, so it's ours now. */
 	MyReplicationSlot = slot;
@@ -533,6 +543,7 @@ void
 ReplicationSlotMarkDirty(void)
 {
 	ReplicationSlot *slot = MyReplicationSlot;
+
 	Assert(MyReplicationSlot != NULL);
 
 	SpinLockAcquire(&slot->mutex);
@@ -760,10 +771,10 @@ CheckSlotRequirements(void)
 				(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
 				 (errmsg("replication slots can only be used if max_replication_slots > 0"))));
 
-	if (wal_level < WAL_LEVEL_ARCHIVE)
+	if (wal_level < WAL_LEVEL_REPLICA)
 		ereport(ERROR,
 				(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
-				 errmsg("replication slots can only be used if wal_level >= archive")));
+				 errmsg("replication slots can only be used if wal_level >= replica")));
 }
 
 /*
@@ -984,7 +995,7 @@ CreateSlotOnDisk(ReplicationSlot *slot)
 	/*
 	 * If we'd now fail - really unlikely - we wouldn't know whether this slot
 	 * would persist after an OS crash or not - so, force a restart. The
-	 * restart would try to fysnc this again till it works.
+	 * restart would try to fsync this again till it works.
 	 */
 	START_CRIT_SECTION();
 
@@ -1095,7 +1106,7 @@ SaveSlotToPath(ReplicationSlot *slot, const char *dir, int elevel)
 	START_CRIT_SECTION();
 
 	fsync_fname(path, false);
-	fsync_fname((char *) dir, true);
+	fsync_fname(dir, true);
 	fsync_fname("pg_replslot", true);
 
 	END_CRIT_SECTION();

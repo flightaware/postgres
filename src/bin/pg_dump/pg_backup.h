@@ -23,7 +23,7 @@
 #ifndef PG_BACKUP_H
 #define PG_BACKUP_H
 
-#include "dumputils.h"
+#include "fe_utils/simple_list.h"
 #include "libpq-fe.h"
 
 
@@ -99,11 +99,12 @@ typedef struct _restoreOptions
 	SimpleStringList indexNames;
 	SimpleStringList functionNames;
 	SimpleStringList schemaNames;
+	SimpleStringList schemaExcludeNames;
 	SimpleStringList triggerNames;
 	SimpleStringList tableNames;
 
 	int			useDB;
-	char	   *dbname;
+	char	   *dbname;			/* subject to expand_dbname */
 	char	   *pgport;
 	char	   *pghost;
 	char	   *username;
@@ -121,7 +122,7 @@ typedef struct _restoreOptions
 
 typedef struct _dumpOptions
 {
-	const char *dbname;
+	const char *dbname;			/* subject to expand_dbname */
 	const char *pghost;
 	const char *pgport;
 	const char *username;
@@ -173,6 +174,7 @@ typedef struct Archive
 	int			verbose;
 	char	   *remoteVersionStr;		/* server's version string */
 	int			remoteVersion;	/* same in numeric form */
+	bool		isStandby;		/* is server a standby node */
 
 	int			minRemoteVersion;		/* allowable range */
 	int			maxRemoteVersion;

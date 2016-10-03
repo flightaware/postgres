@@ -26,6 +26,7 @@
 #include "miscadmin.h"
 #include "nodes/makefuncs.h"
 #include "pg_getopt.h"
+#include "pgstat.h"
 #include "postmaster/bgwriter.h"
 #include "postmaster/startup.h"
 #include "postmaster/walwriter.h"
@@ -46,7 +47,8 @@
 uint32		bootstrap_data_checksum_version = 0;		/* No checksum */
 
 
-#define ALLOC(t, c)		((t *) calloc((unsigned)(c), sizeof(t)))
+#define ALLOC(t, c) \
+	((t *) MemoryContextAllocZero(TopMemoryContext, (unsigned)(c) * sizeof(t)))
 
 static void CheckerModeMain(void);
 static void BootstrapModeMain(void);
@@ -226,7 +228,7 @@ AuxiliaryProcessMain(int argc, char *argv[])
 				SetConfigOption("shared_buffers", optarg, PGC_POSTMASTER, PGC_S_ARGV);
 				break;
 			case 'D':
-				userDoption = strdup(optarg);
+				userDoption = pstrdup(optarg);
 				break;
 			case 'd':
 				{
@@ -534,6 +536,7 @@ static void
 ShutdownAuxiliaryProcess(int code, Datum arg)
 {
 	LWLockReleaseAll();
+	pgstat_report_wait_end();
 }
 
 /* ----------------------------------------------------------------
@@ -1000,13 +1003,8 @@ boot_get_type_io_data(Oid typid,
 static Form_pg_attribute
 AllocateAttribute(void)
 {
-	Form_pg_attribute attribute = (Form_pg_attribute) malloc(ATTRIBUTE_FIXED_PART_SIZE);
-
-	if (!PointerIsValid(attribute))
-		elog(FATAL, "out of memory");
-	MemSet(attribute, 0, ATTRIBUTE_FIXED_PART_SIZE);
-
-	return attribute;
+	return (Form_pg_attribute)
+		MemoryContextAllocZero(TopMemoryContext, ATTRIBUTE_FIXED_PART_SIZE);
 }
 
 /*
@@ -1067,9 +1065,7 @@ index_register(Oid heap,
 	if (nogc == NULL)
 		nogc = AllocSetContextCreate(NULL,
 									 "BootstrapNoGC",
-									 ALLOCSET_DEFAULT_MINSIZE,
-									 ALLOCSET_DEFAULT_INITSIZE,
-									 ALLOCSET_DEFAULT_MAXSIZE);
+									 ALLOCSET_DEFAULT_SIZES);
 
 	oldcxt = MemoryContextSwitchTo(nogc);
 

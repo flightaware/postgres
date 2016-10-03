@@ -131,6 +131,8 @@ static void fileEndForeignScan(ForeignScanState *node);
 static bool fileAnalyzeForeignTable(Relation relation,
 						AcquireSampleRowsFunc *func,
 						BlockNumber *totalpages);
+static bool fileIsForeignScanParallelSafe(PlannerInfo *root, RelOptInfo *rel,
+							  RangeTblEntry *rte);
 
 /*
  * Helper functions
@@ -170,6 +172,7 @@ file_fdw_handler(PG_FUNCTION_ARGS)
 	fdwroutine->ReScanForeignScan = fileReScanForeignScan;
 	fdwroutine->EndForeignScan = fileEndForeignScan;
 	fdwroutine->AnalyzeForeignTable = fileAnalyzeForeignTable;
+	fdwroutine->IsForeignScanParallelSafe = fileIsForeignScanParallelSafe;
 
 	PG_RETURN_POINTER(fdwroutine);
 }
@@ -290,7 +293,7 @@ file_fdw_validator(PG_FUNCTION_ARGS)
 	/*
 	 * Now apply the core COPY code's validation logic for more checks.
 	 */
-	ProcessCopyOptions(NULL, true, other_options);
+	ProcessCopyOptions(NULL, NULL, true, other_options);
 
 	/*
 	 * Filename option is required for file_fdw foreign tables.
@@ -452,10 +455,10 @@ get_file_fdw_attribute_options(Oid relid)
 	 * force_null options set
 	 */
 	if (fnncolumns != NIL)
-		options = lappend(options, makeDefElem("force_not_null", (Node *) fnncolumns));
+		options = lappend(options, makeDefElem("force_not_null", (Node *) fnncolumns, -1));
 
 	if (fncolumns != NIL)
-		options = lappend(options, makeDefElem("force_null", (Node *) fncolumns));
+		options = lappend(options, makeDefElem("force_null", (Node *) fncolumns, -1));
 
 	return options;
 }
@@ -508,7 +511,7 @@ fileGetForeignPaths(PlannerInfo *root,
 										  foreigntableid,
 										  &columns))
 		coptions = list_make1(makeDefElem("convert_selectively",
-										  (Node *) columns));
+										  (Node *) columns, -1));
 
 	/* Estimate costs */
 	estimate_costs(root, baserel, fdw_private,
@@ -521,6 +524,7 @@ fileGetForeignPaths(PlannerInfo *root,
 	 */
 	add_path(baserel, (Path *)
 			 create_foreignscan_path(root, baserel,
+									 NULL,		/* default pathtarget */
 									 baserel->rows,
 									 startup_cost,
 									 total_cost,
@@ -628,7 +632,8 @@ fileBeginForeignScan(ForeignScanState *node, int eflags)
 	 * Create CopyState from FDW options.  We always acquire all columns, so
 	 * as to match the expected ScanTupleSlot signature.
 	 */
-	cstate = BeginCopyFrom(node->ss.ss_currentRelation,
+	cstate = BeginCopyFrom(NULL,
+						   node->ss.ss_currentRelation,
 						   filename,
 						   false,
 						   NIL,
@@ -701,7 +706,8 @@ fileReScanForeignScan(ForeignScanState *node)
 
 	EndCopyFrom(festate->cstate);
 
-	festate->cstate = BeginCopyFrom(node->ss.ss_currentRelation,
+	festate->cstate = BeginCopyFrom(NULL,
+									node->ss.ss_currentRelation,
 									festate->filename,
 									false,
 									NIL,
@@ -762,6 +768,18 @@ fileAnalyzeForeignTable(Relation relation,
 }
 
 /*
+ * fileIsForeignScanParallelSafe
+ *		Reading a file in a parallel worker should work just the same as
+ *		reading it in the leader, so mark scans safe.
+ */
+static bool
+fileIsForeignScanParallelSafe(PlannerInfo *root, RelOptInfo *rel,
+							  RangeTblEntry *rte)
+{
+	return true;
+}
+
+/*
  * check_selective_binary_conversion
  *
  * Check to see if it's useful to convert only a subset of the file's columns
@@ -806,7 +824,7 @@ check_selective_binary_conversion(RelOptInfo *baserel,
 	}
 
 	/* Collect all the attributes needed for joins or final output. */
-	pull_varattnos((Node *) baserel->reltargetlist, baserel->relid,
+	pull_varattnos((Node *) baserel->reltarget->exprs, baserel->relid,
 				   &attrs_used);
 
 	/* Add all the attributes used by restriction clauses. */
@@ -938,7 +956,7 @@ estimate_size(PlannerInfo *root, RelOptInfo *baserel,
 		 */
 		int			tuple_width;
 
-		tuple_width = MAXALIGN(baserel->width) +
+		tuple_width = MAXALIGN(baserel->reltarget->width) +
 			MAXALIGN(SizeofHeapTupleHeader);
 		ntuples = clamp_row_est((double) stat_buf.st_size /
 								(double) tuple_width);
@@ -1037,7 +1055,7 @@ file_acquire_sample_rows(Relation onerel, int elevel,
 	/*
 	 * Create CopyState from FDW options.
 	 */
-	cstate = BeginCopyFrom(onerel, filename, false, NIL, options);
+	cstate = BeginCopyFrom(NULL, onerel, filename, false, NIL, options);
 
 	/*
 	 * Use per-tuple memory context to prevent leak of memory used to read
@@ -1045,9 +1063,7 @@ file_acquire_sample_rows(Relation onerel, int elevel,
 	 */
 	tupcontext = AllocSetContextCreate(CurrentMemoryContext,
 									   "file_fdw temporary context",
-									   ALLOCSET_DEFAULT_MINSIZE,
-									   ALLOCSET_DEFAULT_INITSIZE,
-									   ALLOCSET_DEFAULT_MAXSIZE);
+									   ALLOCSET_DEFAULT_SIZES);
 
 	/* Prepare for sampling rows */
 	reservoir_init_selection_state(&rstate, targrows);

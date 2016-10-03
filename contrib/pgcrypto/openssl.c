@@ -37,8 +37,12 @@
 #include <openssl/blowfish.h>
 #include <openssl/cast.h>
 #include <openssl/des.h>
+#include <openssl/aes.h>
 #include <openssl/rand.h>
 #include <openssl/err.h>
+
+#include "utils/memutils.h"
+#include "utils/resowner.h"
 
 /*
  * Max lengths we might want to handle.
@@ -47,170 +51,76 @@
 #define MAX_IV		(128/8)
 
 /*
- * Compatibility with OpenSSL 0.9.6
- *
- * It needs AES and newer DES and digest API.
- */
-#if OPENSSL_VERSION_NUMBER >= 0x00907000L
-
-/*
- * Nothing needed for OpenSSL 0.9.7+
- */
-
-#include <openssl/aes.h>
-#else							/* old OPENSSL */
-
-/*
- * Emulate OpenSSL AES.
- */
-
-#include "rijndael.c"
-
-#define AES_ENCRYPT 1
-#define AES_DECRYPT 0
-#define AES_KEY		rijndael_ctx
-
-static int
-AES_set_encrypt_key(const uint8 *key, int kbits, AES_KEY *ctx)
-{
-	aes_set_key(ctx, key, kbits, 1);
-	return 0;
-}
-
-static int
-AES_set_decrypt_key(const uint8 *key, int kbits, AES_KEY *ctx)
-{
-	aes_set_key(ctx, key, kbits, 0);
-	return 0;
-}
-
-static void
-AES_ecb_encrypt(const uint8 *src, uint8 *dst, AES_KEY *ctx, int enc)
-{
-	memcpy(dst, src, 16);
-	if (enc)
-		aes_ecb_encrypt(ctx, dst, 16);
-	else
-		aes_ecb_decrypt(ctx, dst, 16);
-}
-
-static void
-AES_cbc_encrypt(const uint8 *src, uint8 *dst, int len, AES_KEY *ctx, uint8 *iv, int enc)
-{
-	memcpy(dst, src, len);
-	if (enc)
-	{
-		aes_cbc_encrypt(ctx, iv, dst, len);
-		memcpy(iv, dst + len - 16, 16);
-	}
-	else
-	{
-		aes_cbc_decrypt(ctx, iv, dst, len);
-		memcpy(iv, src + len - 16, 16);
-	}
-}
-
-/*
- * Emulate DES_* API
- */
-
-#define DES_key_schedule des_key_schedule
-#define DES_cblock des_cblock
-#define DES_set_key(k, ks) \
-		des_set_key((k), *(ks))
-#define DES_ecb_encrypt(i, o, k, e) \
-		des_ecb_encrypt((i), (o), *(k), (e))
-#define DES_ncbc_encrypt(i, o, l, k, iv, e) \
-		des_ncbc_encrypt((i), (o), (l), *(k), (iv), (e))
-#define DES_ecb3_encrypt(i, o, k1, k2, k3, e) \
-		des_ecb3_encrypt((des_cblock *)(i), (des_cblock *)(o), \
-				*(k1), *(k2), *(k3), (e))
-#define DES_ede3_cbc_encrypt(i, o, l, k1, k2, k3, iv, e) \
-		des_ede3_cbc_encrypt((i), (o), \
-				(l), *(k1), *(k2), *(k3), (iv), (e))
-
-/*
- * Emulate newer digest API.
- */
-
-static void
-EVP_MD_CTX_init(EVP_MD_CTX *ctx)
-{
-	memset(ctx, 0, sizeof(*ctx));
-}
-
-static int
-EVP_MD_CTX_cleanup(EVP_MD_CTX *ctx)
-{
-	px_memset(ctx, 0, sizeof(*ctx));
-	return 1;
-}
-
-static int
-EVP_DigestInit_ex(EVP_MD_CTX *ctx, const EVP_MD *md, void *engine)
-{
-	EVP_DigestInit(ctx, md);
-	return 1;
-}
-
-static int
-EVP_DigestFinal_ex(EVP_MD_CTX *ctx, unsigned char *res, unsigned int *len)
-{
-	EVP_DigestFinal(ctx, res, len);
-	return 1;
-}
-#endif   /* old OpenSSL */
-
-/*
- * Provide SHA2 for older OpenSSL < 0.9.8
- */
-#if OPENSSL_VERSION_NUMBER < 0x00908000L
-
-#include "sha2.c"
-#include "internal-sha2.c"
-
-typedef void (*init_f) (PX_MD *md);
-
-static int
-compat_find_digest(const char *name, PX_MD **res)
-{
-	init_f		init = NULL;
-
-	if (pg_strcasecmp(name, "sha224") == 0)
-		init = init_sha224;
-	else if (pg_strcasecmp(name, "sha256") == 0)
-		init = init_sha256;
-	else if (pg_strcasecmp(name, "sha384") == 0)
-		init = init_sha384;
-	else if (pg_strcasecmp(name, "sha512") == 0)
-		init = init_sha512;
-	else
-		return PXE_NO_HASH;
-
-	*res = px_alloc(sizeof(PX_MD));
-	init(*res);
-	return 0;
-}
-#else
-#define compat_find_digest(name, res)  (PXE_NO_HASH)
-#endif
-
-/*
  * Hashes
  */
 
+/*
+ * To make sure we don't leak OpenSSL handles on abort, we keep OSSLDigest
+ * objects in a linked list, allocated in TopMemoryContext. We use the
+ * ResourceOwner mechanism to free them on abort.
+ */
 typedef struct OSSLDigest
 {
 	const EVP_MD *algo;
-	EVP_MD_CTX	ctx;
+	EVP_MD_CTX *ctx;
+
+	ResourceOwner owner;
+	struct OSSLDigest *next;
+	struct OSSLDigest *prev;
 } OSSLDigest;
+
+static OSSLDigest *open_digests = NULL;
+static bool resowner_callback_registered = false;
+
+static void
+free_openssldigest(OSSLDigest *digest)
+{
+	EVP_MD_CTX_destroy(digest->ctx);
+	if (digest->prev)
+		digest->prev->next = digest->next;
+	else
+		open_digests = digest->next;
+	if (digest->next)
+		digest->next->prev = digest->prev;
+	pfree(digest);
+}
+
+/*
+ * Close any open OpenSSL handles on abort.
+ */
+static void
+digest_free_callback(ResourceReleasePhase phase,
+					 bool isCommit,
+					 bool isTopLevel,
+					 void *arg)
+{
+	OSSLDigest *curr;
+	OSSLDigest *next;
+
+	if (phase != RESOURCE_RELEASE_AFTER_LOCKS)
+		return;
+
+	next = open_digests;
+	while (next)
+	{
+		curr = next;
+		next = curr->next;
+
+		if (curr->owner == CurrentResourceOwner)
+		{
+			if (isCommit)
+				elog(WARNING, "pgcrypto digest reference leak: digest %p still referenced", curr);
+			free_openssldigest(curr);
+		}
+	}
+}
 
 static unsigned
 digest_result_size(PX_MD *h)
 {
 	OSSLDigest *digest = (OSSLDigest *) h->p.ptr;
 
-	return EVP_MD_CTX_size(&digest->ctx);
+	return EVP_MD_CTX_size(digest->ctx);
 }
 
 static unsigned
@@ -218,7 +128,7 @@ digest_block_size(PX_MD *h)
 {
 	OSSLDigest *digest = (OSSLDigest *) h->p.ptr;
 
-	return EVP_MD_CTX_block_size(&digest->ctx);
+	return EVP_MD_CTX_block_size(digest->ctx);
 }
 
 static void
@@ -226,7 +136,7 @@ digest_reset(PX_MD *h)
 {
 	OSSLDigest *digest = (OSSLDigest *) h->p.ptr;
 
-	EVP_DigestInit_ex(&digest->ctx, digest->algo, NULL);
+	EVP_DigestInit_ex(digest->ctx, digest->algo, NULL);
 }
 
 static void
@@ -234,7 +144,7 @@ digest_update(PX_MD *h, const uint8 *data, unsigned dlen)
 {
 	OSSLDigest *digest = (OSSLDigest *) h->p.ptr;
 
-	EVP_DigestUpdate(&digest->ctx, data, dlen);
+	EVP_DigestUpdate(digest->ctx, data, dlen);
 }
 
 static void
@@ -242,7 +152,7 @@ digest_finish(PX_MD *h, uint8 *dst)
 {
 	OSSLDigest *digest = (OSSLDigest *) h->p.ptr;
 
-	EVP_DigestFinal_ex(&digest->ctx, dst, NULL);
+	EVP_DigestFinal_ex(digest->ctx, dst, NULL);
 }
 
 static void
@@ -250,9 +160,7 @@ digest_free(PX_MD *h)
 {
 	OSSLDigest *digest = (OSSLDigest *) h->p.ptr;
 
-	EVP_MD_CTX_cleanup(&digest->ctx);
-
-	px_free(digest);
+	free_openssldigest(digest);
 	px_free(h);
 }
 
@@ -264,6 +172,7 @@ int
 px_find_digest(const char *name, PX_MD **res)
 {
 	const EVP_MD *md;
+	EVP_MD_CTX *ctx;
 	PX_MD	   *h;
 	OSSLDigest *digest;
 
@@ -273,17 +182,43 @@ px_find_digest(const char *name, PX_MD **res)
 		OpenSSL_add_all_algorithms();
 	}
 
+	if (!resowner_callback_registered)
+	{
+		RegisterResourceReleaseCallback(digest_free_callback, NULL);
+		resowner_callback_registered = true;
+	}
+
 	md = EVP_get_digestbyname(name);
 	if (md == NULL)
-		return compat_find_digest(name, res);
+		return PXE_NO_HASH;
 
-	digest = px_alloc(sizeof(*digest));
-	digest->algo = md;
+	/*
+	 * Create an OSSLDigest object, an OpenSSL MD object, and a PX_MD object.
+	 * The order is crucial, to make sure we don't leak anything on
+	 * out-of-memory or other error.
+	 */
+	digest = MemoryContextAlloc(TopMemoryContext, sizeof(*digest));
 
-	EVP_MD_CTX_init(&digest->ctx);
-	if (EVP_DigestInit_ex(&digest->ctx, digest->algo, NULL) == 0)
+	ctx = EVP_MD_CTX_create();
+	if (!ctx)
+	{
+		pfree(digest);
 		return -1;
+	}
+	if (EVP_DigestInit_ex(ctx, md, NULL) == 0)
+	{
+		pfree(digest);
+		return -1;
+	}
 
+	digest->algo = md;
+	digest->ctx = ctx;
+	digest->owner = CurrentResourceOwner;
+	digest->next = open_digests;
+	digest->prev = NULL;
+	open_digests = digest;
+
+	/* The PX_MD object is allocated in the current memory context. */
 	h = px_alloc(sizeof(*h));
 	h->result_size = digest_result_size;
 	h->block_size = digest_block_size;
@@ -987,7 +922,13 @@ static void
 init_openssl_rand(void)
 {
 	if (RAND_get_rand_method() == NULL)
+	{
+#ifdef HAVE_RAND_OPENSSL
+		RAND_set_rand_method(RAND_OpenSSL());
+#else
 		RAND_set_rand_method(RAND_SSLeay());
+#endif
+	}
 	openssl_random_init = 1;
 }
 
@@ -1001,21 +942,6 @@ px_get_random_bytes(uint8 *dst, unsigned count)
 
 	res = RAND_bytes(dst, count);
 	if (res == 1)
-		return count;
-
-	return PXE_OSSL_RAND_ERROR;
-}
-
-int
-px_get_pseudo_random_bytes(uint8 *dst, unsigned count)
-{
-	int			res;
-
-	if (!openssl_random_init)
-		init_openssl_rand();
-
-	res = RAND_pseudo_bytes(dst, count);
-	if (res == 0 || res == 1)
 		return count;
 
 	return PXE_OSSL_RAND_ERROR;

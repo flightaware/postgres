@@ -15,6 +15,7 @@
 
 #include "executor/executor.h"
 #include "lib/stringinfo.h"
+#include "parser/parse_node.h"
 
 typedef enum ExplainFormat
 {
@@ -35,13 +36,15 @@ typedef struct ExplainState
 	bool		timing;			/* print detailed node timing */
 	bool		summary;		/* print total planning and execution timing */
 	ExplainFormat format;		/* output format */
-	/* other states */
+	/* state for output formatting --- not reset for each new plan tree */
+	int			indent;			/* current indentation level */
+	List	   *grouping_stack; /* format-specific grouping state */
+	/* state related to the current plan tree (filled by ExplainPrintPlan) */
 	PlannedStmt *pstmt;			/* top of plan */
 	List	   *rtable;			/* range table */
 	List	   *rtable_names;	/* alias names for RTEs */
-	int			indent;			/* current indentation level */
-	List	   *grouping_stack; /* format-specific grouping state */
 	List	   *deparse_cxt;	/* context list for deparsing expressions */
+	Bitmapset  *printed_subplans;		/* ids of SubPlans we've printed */
 } ExplainState;
 
 /* Hook for plugins to get control in ExplainOneQuery() */
@@ -57,7 +60,7 @@ typedef const char *(*explain_get_index_name_hook_type) (Oid indexId);
 extern PGDLLIMPORT explain_get_index_name_hook_type explain_get_index_name_hook;
 
 
-extern void ExplainQuery(ExplainStmt *stmt, const char *queryString,
+extern void ExplainQuery(ParseState *pstate, ExplainStmt *stmt, const char *queryString,
 			 ParamListInfo params, DestReceiver *dest);
 
 extern ExplainState *NewExplainState(void);
@@ -93,5 +96,7 @@ extern void ExplainPropertyLong(const char *qlabel, long value,
 					ExplainState *es);
 extern void ExplainPropertyFloat(const char *qlabel, double value, int ndigits,
 					 ExplainState *es);
+extern void ExplainPropertyBool(const char *qlabel, bool value,
+					ExplainState *es);
 
 #endif   /* EXPLAIN_H */

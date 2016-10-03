@@ -114,8 +114,8 @@ CreateProceduralLanguage(CreatePLangStmt *stmt)
 			if (funcrettype != LANGUAGE_HANDLEROID)
 				ereport(ERROR,
 						(errcode(ERRCODE_WRONG_OBJECT_TYPE),
-				  errmsg("function %s must return type \"language_handler\"",
-						 NameListToString(funcname))));
+						 errmsg("function %s must return type %s",
+						   NameListToString(funcname), "language_handler")));
 		}
 		else
 		{
@@ -285,8 +285,8 @@ CreateProceduralLanguage(CreatePLangStmt *stmt)
 			else
 				ereport(ERROR,
 						(errcode(ERRCODE_WRONG_OBJECT_TYPE),
-				  errmsg("function %s must return type \"language_handler\"",
-						 NameListToString(stmt->plhandler))));
+						 errmsg("function %s must return type %s",
+					NameListToString(stmt->plhandler), "language_handler")));
 		}
 
 		/* validate the inline function */
@@ -463,7 +463,7 @@ find_language_template(const char *languageName)
 	ScanKeyInit(&key,
 				Anum_pg_pltemplate_tmplname,
 				BTEqualStrategyNumber, F_NAMEEQ,
-				NameGetDatum(languageName));
+				CStringGetDatum(languageName));
 	scan = systable_beginscan(rel, PLTemplateNameIndexId, true,
 							  NULL, 1, &key);
 

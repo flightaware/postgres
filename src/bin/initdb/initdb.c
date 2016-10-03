@@ -67,6 +67,7 @@
 #include "getaddrinfo.h"
 #include "getopt_long.h"
 #include "miscadmin.h"
+#include "fe_utils/string_utils.h"
 
 
 /* Define PG_FLUSH_DATA_WORKS if we have an implementation for pg_flush_data */
@@ -90,6 +91,9 @@ static const char *const auth_methods_host[] = {
 #ifdef USE_PAM
 	"pam", "pam ",
 #endif
+#ifdef USE_BSD_AUTH
+	"bsd",
+#endif
 #ifdef USE_LDAP
 	"ldap",
 #endif
@@ -102,6 +106,9 @@ static const char *const auth_methods_local[] = {
 	"trust", "reject", "md5", "password", "peer", "radius",
 #ifdef USE_PAM
 	"pam", "pam ",
+#endif
+#ifdef USE_BSD_AUTH
+	"bsd",
 #endif
 #ifdef USE_LDAP
 	"ldap",
@@ -128,6 +135,7 @@ static const char *default_text_search_config = "";
 static char *username = "";
 static bool pwprompt = false;
 static char *pwfilename = NULL;
+static char *superuser_password = NULL;
 static const char *authmethodhost = "";
 static const char *authmethodlocal = "";
 static bool debug = false;
@@ -248,7 +256,7 @@ static void test_config_settings(void);
 static void setup_config(void);
 static void bootstrap_template1(void);
 static void setup_auth(FILE *cmdfd);
-static void get_set_pwd(FILE *cmdfd);
+static void get_su_pwd(void);
 static void setup_depend(FILE *cmdfd);
 static void setup_sysviews(FILE *cmdfd);
 static void setup_description(FILE *cmdfd);
@@ -324,14 +332,6 @@ do { \
 	if (fprintf(cmdfd, fmt, arg1, arg2, arg3) < 0 || fflush(cmdfd) < 0) \
 		output_failed = true, output_errno = errno; \
 } while (0)
-
-#ifndef WIN32
-#define QUOTE_PATH	""
-#define DIR_SEP "/"
-#else
-#define QUOTE_PATH	"\""
-#define DIR_SEP "\\"
-#endif
 
 static char *
 escape_quotes(const char *src)
@@ -1286,6 +1286,12 @@ setup_config(void)
 							  "#effective_io_concurrency = 0");
 #endif
 
+#ifdef WIN32
+	conflines = replace_token(conflines,
+							  "#update_process_title = on",
+							  "#update_process_title = off");
+#endif
+
 	snprintf(path, sizeof(path), "%s/postgresql.conf", pg_data);
 
 	writefile(path, conflines);
@@ -1539,30 +1545,35 @@ setup_auth(FILE *cmdfd)
 
 	for (line = pg_authid_setup; *line != NULL; line++)
 		PG_CMD_PUTS(*line);
+
+	if (superuser_password)
+		PG_CMD_PRINTF2("ALTER USER \"%s\" WITH PASSWORD E'%s';\n\n",
+					   username, escape_quotes(superuser_password));
 }
 
 /*
- * get the superuser password if required, and call postgres to set it
+ * get the superuser password if required
  */
 static void
-get_set_pwd(FILE *cmdfd)
+get_su_pwd(void)
 {
-	char	   *pwd1,
-			   *pwd2;
+	char		pwd1[100];
+	char		pwd2[100];
 
 	if (pwprompt)
 	{
 		/*
 		 * Read password from terminal
 		 */
-		pwd1 = simple_prompt("Enter new superuser password: ", 100, false);
-		pwd2 = simple_prompt("Enter it again: ", 100, false);
+		printf("\n");
+		fflush(stdout);
+		simple_prompt("Enter new superuser password: ", pwd1, sizeof(pwd1), false);
+		simple_prompt("Enter it again: ", pwd2, sizeof(pwd2), false);
 		if (strcmp(pwd1, pwd2) != 0)
 		{
 			fprintf(stderr, _("Passwords didn't match.\n"));
 			exit_nicely();
 		}
-		free(pwd2);
 	}
 	else
 	{
@@ -1575,7 +1586,6 @@ get_set_pwd(FILE *cmdfd)
 		 * for now.
 		 */
 		FILE	   *pwf = fopen(pwfilename, "r");
-		char		pwdbuf[MAXPGPATH];
 		int			i;
 
 		if (!pwf)
@@ -1584,7 +1594,7 @@ get_set_pwd(FILE *cmdfd)
 					progname, pwfilename, strerror(errno));
 			exit_nicely();
 		}
-		if (!fgets(pwdbuf, sizeof(pwdbuf), pwf))
+		if (!fgets(pwd1, sizeof(pwd1), pwf))
 		{
 			if (ferror(pwf))
 				fprintf(stderr, _("%s: could not read password from file \"%s\": %s\n"),
@@ -1596,18 +1606,12 @@ get_set_pwd(FILE *cmdfd)
 		}
 		fclose(pwf);
 
-		i = strlen(pwdbuf);
-		while (i > 0 && (pwdbuf[i - 1] == '\r' || pwdbuf[i - 1] == '\n'))
-			pwdbuf[--i] = '\0';
-
-		pwd1 = pg_strdup(pwdbuf);
-
+		i = strlen(pwd1);
+		while (i > 0 && (pwd1[i - 1] == '\r' || pwd1[i - 1] == '\n'))
+			pwd1[--i] = '\0';
 	}
 
-	PG_CMD_PRINTF2("ALTER USER \"%s\" WITH PASSWORD E'%s';\n\n",
-				   username, escape_quotes(pwd1));
-
-	free(pwd1);
+	superuser_password = pg_strdup(pwd1);
 }
 
 /*
@@ -1657,6 +1661,8 @@ setup_depend(FILE *cmdfd)
 		" FROM pg_opclass;\n\n",
 		"INSERT INTO pg_depend SELECT 0,0,0, tableoid,oid,0, 'p' "
 		" FROM pg_opfamily;\n\n",
+		"INSERT INTO pg_depend SELECT 0,0,0, tableoid,oid,0, 'p' "
+		" FROM pg_am;\n\n",
 		"INSERT INTO pg_depend SELECT 0,0,0, tableoid,oid,0, 'p' "
 		" FROM pg_amop;\n\n",
 		"INSERT INTO pg_depend SELECT 0,0,0, tableoid,oid,0, 'p' "
@@ -1989,6 +1995,14 @@ setup_dictionary(FILE *cmdfd)
  * Some objects may require different permissions by default, so we
  * make sure we don't overwrite privilege sets that have already been
  * set (NOT NULL).
+ *
+ * Also populate pg_init_privs to save what the privileges are at init
+ * time.  This is used by pg_dump to allow users to change privileges
+ * on catalog objects and to have those privilege changes preserved
+ * across dump/reload and pg_upgrade.
+ *
+ * Note that pg_init_privs is only for per-database objects and therefore
+ * we don't include databases or tablespaces.
  */
 static void
 setup_privileges(FILE *cmdfd)
@@ -1997,11 +2011,129 @@ setup_privileges(FILE *cmdfd)
 	char	  **priv_lines;
 	static char *privileges_setup[] = {
 		"UPDATE pg_class "
-		"  SET relacl = E'{\"=r/\\\\\"$POSTGRES_SUPERUSERNAME\\\\\"\"}' "
+		"  SET relacl = (SELECT array_agg(a.acl) FROM "
+		" (SELECT E'=r/\"$POSTGRES_SUPERUSERNAME\"' as acl "
+		"  UNION SELECT unnest(pg_catalog.acldefault("
+		"    CASE WHEN relkind = 'S' THEN 's' ELSE 'r' END::\"char\",10::oid))"
+		" ) as a) "
 		"  WHERE relkind IN ('r', 'v', 'm', 'S') AND relacl IS NULL;\n\n",
 		"GRANT USAGE ON SCHEMA pg_catalog TO PUBLIC;\n\n",
 		"GRANT CREATE, USAGE ON SCHEMA public TO PUBLIC;\n\n",
 		"REVOKE ALL ON pg_largeobject FROM PUBLIC;\n\n",
+		"INSERT INTO pg_init_privs "
+		"  (objoid, classoid, objsubid, initprivs, privtype)"
+		"    SELECT"
+		"        oid,"
+		"        (SELECT oid FROM pg_class WHERE relname = 'pg_class'),"
+		"        0,"
+		"        relacl,"
+		"        'i'"
+		"    FROM"
+		"        pg_class"
+		"    WHERE"
+		"        relacl IS NOT NULL"
+		"        AND relkind IN ('r', 'v', 'm', 'S');",
+		"INSERT INTO pg_init_privs "
+		"  (objoid, classoid, objsubid, initprivs, privtype)"
+		"    SELECT"
+		"        pg_class.oid,"
+		"        (SELECT oid FROM pg_class WHERE relname = 'pg_class'),"
+		"        pg_attribute.attnum,"
+		"        pg_attribute.attacl,"
+		"        'i'"
+		"    FROM"
+		"        pg_class"
+		"        JOIN pg_attribute ON (pg_class.oid = pg_attribute.attrelid)"
+		"    WHERE"
+		"        pg_attribute.attacl IS NOT NULL"
+		"        AND pg_class.relkind IN ('r', 'v', 'm', 'S');",
+		"INSERT INTO pg_init_privs "
+		"  (objoid, classoid, objsubid, initprivs, privtype)"
+		"    SELECT"
+		"        oid,"
+		"        (SELECT oid FROM pg_class WHERE relname = 'pg_proc'),"
+		"        0,"
+		"        proacl,"
+		"        'i'"
+		"    FROM"
+		"        pg_proc"
+		"    WHERE"
+		"        proacl IS NOT NULL;",
+		"INSERT INTO pg_init_privs "
+		"  (objoid, classoid, objsubid, initprivs, privtype)"
+		"    SELECT"
+		"        oid,"
+		"        (SELECT oid FROM pg_class WHERE relname = 'pg_type'),"
+		"        0,"
+		"        typacl,"
+		"        'i'"
+		"    FROM"
+		"        pg_type"
+		"    WHERE"
+		"        typacl IS NOT NULL;",
+		"INSERT INTO pg_init_privs "
+		"  (objoid, classoid, objsubid, initprivs, privtype)"
+		"    SELECT"
+		"        oid,"
+		"        (SELECT oid FROM pg_class WHERE relname = 'pg_language'),"
+		"        0,"
+		"        lanacl,"
+		"        'i'"
+		"    FROM"
+		"        pg_language"
+		"    WHERE"
+		"        lanacl IS NOT NULL;",
+		"INSERT INTO pg_init_privs "
+		"  (objoid, classoid, objsubid, initprivs, privtype)"
+		"    SELECT"
+		"        oid,"
+		"        (SELECT oid FROM pg_class WHERE "
+		"		  relname = 'pg_largeobject_metadata'),"
+		"        0,"
+		"        lomacl,"
+		"        'i'"
+		"    FROM"
+		"        pg_largeobject_metadata"
+		"    WHERE"
+		"        lomacl IS NOT NULL;",
+		"INSERT INTO pg_init_privs "
+		"  (objoid, classoid, objsubid, initprivs, privtype)"
+		"    SELECT"
+		"        oid,"
+		"        (SELECT oid FROM pg_class WHERE relname = 'pg_namespace'),"
+		"        0,"
+		"        nspacl,"
+		"        'i'"
+		"    FROM"
+		"        pg_namespace"
+		"    WHERE"
+		"        nspacl IS NOT NULL;",
+		"INSERT INTO pg_init_privs "
+		"  (objoid, classoid, objsubid, initprivs, privtype)"
+		"    SELECT"
+		"        oid,"
+		"        (SELECT oid FROM pg_class WHERE "
+		"		  relname = 'pg_foreign_data_wrapper'),"
+		"        0,"
+		"        fdwacl,"
+		"        'i'"
+		"    FROM"
+		"        pg_foreign_data_wrapper"
+		"    WHERE"
+		"        fdwacl IS NOT NULL;",
+		"INSERT INTO pg_init_privs "
+		"  (objoid, classoid, objsubid, initprivs, privtype)"
+		"    SELECT"
+		"        oid,"
+		"        (SELECT oid FROM pg_class "
+		"		  WHERE relname = 'pg_foreign_server'),"
+		"        0,"
+		"        srvacl,"
+		"        'i'"
+		"    FROM"
+		"        pg_foreign_server"
+		"    WHERE"
+		"        srvacl IS NOT NULL;",
 		NULL
 	};
 
@@ -3146,8 +3278,6 @@ initialize_data_directory(void)
 	PG_CMD_OPEN;
 
 	setup_auth(cmdfd);
-	if (pwprompt || pwfilename)
-		get_set_pwd(cmdfd);
 
 	setup_depend(cmdfd);
 
@@ -3219,7 +3349,8 @@ main(int argc, char *argv[])
 	int			c;
 	int			option_index;
 	char	   *effective_user;
-	char		bin_dir[MAXPGPATH];
+	PQExpBuffer start_db_cmd;
+	char		pg_ctl_path[MAXPGPATH];
 
 	/*
 	 * Ensure that buffering behavior of stdout and stderr matches what it is
@@ -3409,6 +3540,12 @@ main(int argc, char *argv[])
 	if (strlen(username) == 0)
 		username = effective_user;
 
+	if (strncmp(username, "pg_", 3) == 0)
+	{
+		fprintf(stderr, _("%s: superuser name \"%s\" is disallowed; role names cannot begin with \"pg_\"\n"), progname, username);
+		exit(1);
+	}
+
 	printf(_("The files belonging to this database system will be owned "
 			 "by user \"%s\".\n"
 			 "This user must also own the server process.\n\n"),
@@ -3429,6 +3566,9 @@ main(int argc, char *argv[])
 	else
 		printf(_("Data page checksums are disabled.\n"));
 
+	if (pwprompt || pwfilename)
+		get_su_pwd();
+
 	printf("\n");
 
 	initialize_data_directory();
@@ -3441,14 +3581,33 @@ main(int argc, char *argv[])
 	if (authwarning != NULL)
 		fprintf(stderr, "%s", authwarning);
 
-	/* Get directory specification used to start this executable */
-	strlcpy(bin_dir, argv[0], sizeof(bin_dir));
-	get_parent_directory(bin_dir);
+	/*
+	 * Build up a shell command to tell the user how to start the server
+	 */
+	start_db_cmd = createPQExpBuffer();
+
+	/* Get directory specification used to start initdb ... */
+	strlcpy(pg_ctl_path, argv[0], sizeof(pg_ctl_path));
+	canonicalize_path(pg_ctl_path);
+	get_parent_directory(pg_ctl_path);
+	/* ... and tag on pg_ctl instead */
+	join_path_components(pg_ctl_path, pg_ctl_path, "pg_ctl");
+
+	/* path to pg_ctl, properly quoted */
+	appendShellString(start_db_cmd, pg_ctl_path);
+
+	/* add -D switch, with properly quoted data directory */
+	appendPQExpBufferStr(start_db_cmd, " -D ");
+	appendShellString(start_db_cmd, pgdata_native);
+
+	/* add suggested -l switch and "start" command */
+	appendPQExpBufferStr(start_db_cmd, " -l logfile start");
 
 	printf(_("\nSuccess. You can now start the database server using:\n\n"
-			 "    %s%s%spg_ctl%s -D %s%s%s -l logfile start\n\n"),
-	   QUOTE_PATH, bin_dir, (strlen(bin_dir) > 0) ? DIR_SEP : "", QUOTE_PATH,
-		   QUOTE_PATH, pgdata_native, QUOTE_PATH);
+			 "    %s\n\n"),
+		   start_db_cmd->data);
+
+	destroyPQExpBuffer(start_db_cmd);
 
 	return 0;
 }
