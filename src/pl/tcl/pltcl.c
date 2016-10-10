@@ -2996,6 +2996,15 @@ static int
 pltcl_SPI_lastoid(ClientData cdata, Tcl_Interp *interp,
 				  int objc, Tcl_Obj *const objv[])
 {
+	/************************************************************
+	 * Check call syntax
+	 ************************************************************/
+	if (objc != 1)
+	{
+		Tcl_WrongNumArgs(interp, 1, objv, "");
+		return TCL_ERROR;
+	}
+
 	Tcl_SetObjResult(interp, Tcl_NewWideIntObj(SPI_lastoid));
 	return TCL_OK;
 }
