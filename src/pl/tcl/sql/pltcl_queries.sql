@@ -117,6 +117,7 @@ select * from tcl_eval('spi_exec -count');
 select * from tcl_eval('spi_exec -array');
 select * from tcl_eval('spi_exec -count abc');
 select * from tcl_eval('spi_exec query loop body toomuch');
+select * from tcl_eval('spi_exec "begin; rollback;"');
 
 -- Test spi_execp
 select * from tcl_eval('spi_execp');
@@ -124,6 +125,7 @@ select * from tcl_eval('spi_execp -count');
 select * from tcl_eval('spi_execp -array');
 select * from tcl_eval('spi_execp -count abc');
 select * from tcl_eval('spi_execp -nulls');
+select * from tcl_eval('set prep [spi_prepare "begin; rollback" ""]; spi_execp $prep');
 
 -- test spi_prepare
 select * from tcl_eval('spi_prepare');
@@ -145,3 +147,5 @@ select * from tcl_test_sequence(1,10) as a;
 
 -- test forced error
 select tcl_eval('error "forced error"');
+
+select * from tcl_eval('unset -nocomplain ::tcl_vwait; after 100 {set ::tcl_vwait 1}; vwait ::tcl_vwait; unset -nocomplain ::tcl_vwait');
