@@ -612,6 +612,27 @@ create function tcl_error_handling_test() returns text as $$
     }
 $$ language pltcl;
 
+CREATE OR REPLACE FUNCTION tcl_eval(in string varchar, out code int, out result varchar) AS $$
+	set code [catch $1 catchResult]
+	return [list code $code result $catchResult]
+$$ LANGUAGE 'pltcl';
+
+CREATE OR REPLACE FUNCTION tcl_test_cube_squared(in int, out squared int, out cubed int) AS $$
+    return [list squared [expr {$1 * $1}] cubed [expr {$1 * $1 * $1}]]
+$$ LANGUAGE 'pltcl';
+
+CREATE OR REPLACE FUNCTION tcl_test_cube_squared_rows(int,int) RETURNS TABLE (n int, squared int, cubed int) AS $$
+    for {set i $1} {$i < $2} {incr i} {
+        return_next [list n $i squared [expr {$i * $i}] cubed [expr {$i * $i * $i}]]
+    }
+$$ LANGUAGE 'pltcl';
+
+CREATE OR REPLACE FUNCTION tcl_test_sequence(int,int) RETURNS SETOF int AS $$
+    for {set i $1} {$i < $2} {incr i} {
+        return_next $i
+    }
+$$ language 'pltcl';
+
 select tcl_error_handling_test();
 
 create temp table foo(f1 int);
