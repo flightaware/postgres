@@ -139,6 +139,17 @@ select * from tcl_eval('elog foo bar');
 -- test compound return
 select * from tcl_test_cube_squared(5);
 
+CREATE FUNCTION bad_record(
+	OUT a text
+	, OUT b text
+) LANGUAGE pltcl AS $$return [list cow]$$;
+SELECT bad_record();
+
+CREATE OR REPLACE FUNCTION crash(in int, out squared int, out cubed int) AS $$
+    return foo
+$$ LANGUAGE 'pltcl';
+SELECT crash(5);
+
 -- test multi-row returns
 select * from tcl_test_cube_squared_rows(1,10);
 
