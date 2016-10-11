@@ -97,3 +97,47 @@ create temp table t1 (f1 int);
 select tcl_lastoid('t1');
 create temp table t2 (f1 int) with oids;
 select tcl_lastoid('t2') > 0;
+
+-- Test quote
+select tcl_eval('quote foo bar');
+select tcl_eval('quote [format %c 39]');
+select tcl_eval('quote [format %c 92]');
+
+-- Test argisnull
+select tcl_eval('argisnull');
+select tcl_eval('argisnull 14');
+select tcl_eval('argisnull abc');
+
+-- Test return_null
+select tcl_eval('return_null 14');
+
+-- Test spi_exec
+select tcl_eval('spi_exec');
+select tcl_eval('spi_exec -count');
+select tcl_eval('spi_exec -array');
+select tcl_eval('spi_exec -count abc');
+select tcl_eval('spi_exec query loop body toomuch');
+select tcl_eval('spi_exec "begin; rollback;"');
+
+-- Test spi_execp
+select tcl_eval('spi_execp');
+select tcl_eval('spi_execp -count');
+select tcl_eval('spi_execp -array');
+select tcl_eval('spi_execp -count abc');
+select tcl_eval('spi_execp -nulls');
+select tcl_eval('set prep [spi_prepare "begin; rollback" ""]; spi_execp $prep');
+
+-- test spi_prepare
+select tcl_eval('spi_prepare');
+select tcl_eval('spi_prepare a b');
+select tcl_eval('spi_prepare a "b {"');
+
+-- test elog
+select tcl_eval('elog');
+select tcl_eval('elog foo bar');
+
+-- test forced error
+select tcl_eval('error "forced error"');
+
+select tcl_eval('unset -nocomplain ::tcl_vwait; after 100 {set ::tcl_vwait 1}; vwait ::tcl_vwait; unset -nocomplain ::tcl_vwait');
+

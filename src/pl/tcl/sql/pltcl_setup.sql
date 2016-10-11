@@ -616,6 +616,8 @@ select tcl_error_handling_test();
 
 create temp table foo(f1 int);
 
+CREATE OR REPLACE FUNCTION tcl_eval(text) RETURNS text AS $$eval $1$$ LANGUAGE pltcl;
+
 select tcl_error_handling_test();
 
 drop table foo;
