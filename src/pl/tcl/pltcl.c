@@ -1407,7 +1407,7 @@ throw_tcl_error(Tcl_Interp *interp, const char *proname)
 	econtext = utf_u2e(Tcl_GetVar(interp, "errorInfo", TCL_GLOBAL_ONLY));
 	ereport(ERROR,
 			(errcode(ERRCODE_EXTERNAL_ROUTINE_EXCEPTION),
-			 errmsg("Tcl error: %s", emsg),
+			 errmsg("%s", emsg),
 			 errcontext("%s\nin PL/Tcl function \"%s\"",
 						econtext, proname)));
 }
