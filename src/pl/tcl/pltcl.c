@@ -1059,10 +1059,6 @@ pltcl_trigger_handler(PG_FUNCTION_ARGS, bool pltrusted)
 	 ************************************************************/
 	tcl_cmd = Tcl_NewObj();
 	Tcl_IncrRefCount(tcl_cmd);
-	tcl_trigtup = Tcl_NewObj();
-	Tcl_IncrRefCount(tcl_trigtup);
-	tcl_newtup = Tcl_NewObj();
-	Tcl_IncrRefCount(tcl_newtup);
 	PG_TRY();
 	{
 		/* The procedure name (note this is all ASCII, so no utf_e2u) */
@@ -1105,8 +1101,6 @@ pltcl_trigger_handler(PG_FUNCTION_ARGS, bool pltrusted)
 										 Tcl_NewStringObj(utf_e2u(NameStr(tupdesc->attrs[i]->attname)), -1));
 		}
 		Tcl_ListObjAppendElement(NULL, tcl_cmd, tcl_trigtup);
-		Tcl_DecrRefCount(tcl_trigtup);
-		tcl_trigtup = Tcl_NewObj();
 
 		/* The when part of the event for TG_when */
 		if (TRIGGER_FIRED_BEFORE(trigdata->tg_event))
@@ -1208,8 +1202,6 @@ pltcl_trigger_handler(PG_FUNCTION_ARGS, bool pltrusted)
 	PG_CATCH();
 	{
 		Tcl_DecrRefCount(tcl_cmd);
-		Tcl_DecrRefCount(tcl_trigtup);
-		Tcl_DecrRefCount(tcl_newtup);
 		PG_RE_THROW();
 	}
 	PG_END_TRY();
@@ -1223,8 +1215,6 @@ pltcl_trigger_handler(PG_FUNCTION_ARGS, bool pltrusted)
 
 	/* Release refcount to free tcl_cmd (and all subsidiary objects) */
 	Tcl_DecrRefCount(tcl_cmd);
-	Tcl_DecrRefCount(tcl_trigtup);
-	Tcl_DecrRefCount(tcl_newtup);
 
 	/************************************************************
 	 * Check for errors reported by Tcl.
