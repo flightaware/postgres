@@ -2457,7 +2457,7 @@ pltcl_SPI_execute(ClientData cdata, Tcl_Interp *interp,
 	i = 1;
 	while (i < objc)
 	{
-		if (Tcl_GetIndexFromObj(interp, objv[i], options, "option",
+		if (Tcl_GetIndexFromObj(NULL, objv[i], options, "option",
 								TCL_EXACT, &optIndex) != TCL_OK)
 			break;
 
