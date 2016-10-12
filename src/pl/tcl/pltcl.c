@@ -518,13 +518,12 @@ pltcl_init_load_unknown(Tcl_Interp *interp)
 										   RelationGetRelationName(pmrel));
 
 	/************************************************************
-	 * Read all the rows from it where modname = 'unknown',
-	 * in the order of modseq
+	 * Read all the rows from it where modname = 'unknown'
 	 ************************************************************/
 	buflen = strlen(pmrelname) + 100;
 	buf = (char *) palloc(buflen);
 	snprintf(buf, buflen,
-		   "select modsrc from %s where modname = 'unknown' order by modseq",
+		   "select modsrc from %s where modname = 'unknown'",
 			 pmrelname);
 
 	spi_rc = SPI_execute(buf, false, 0);

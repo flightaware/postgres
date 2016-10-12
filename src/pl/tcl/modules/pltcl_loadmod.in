@@ -139,8 +139,8 @@ proc __PLTcl_loadmod_check_tables {conn} {
 
     set error 0
 
-    set names {{} modname modseq modsrc}
-    set types {{} name int2 text}
+    set names {{} modname modsrc}
+    set types {{} name text}
 
     switch [__PLTcl_loadmod_check_table $conn pltcl_modules $names $types] {
         0 {
@@ -213,8 +213,8 @@ proc __PLTcl_loadmod_read_current {conn} {
 	set srctext ""
         pg_select $conn "select * from pltcl_modules		\
 		where modname = '$mname'			\
-		order by modseq" tup {
-	    append srctext $tup(modsrc)
+		" tup {
+	    set srctext $tup(modsrc)
         }
 
 	if {[catch {
@@ -304,7 +304,6 @@ proc __PLTcl_loadmod_create_tables {conn} {
 	        set res [pg_exec $conn				\
 		    "create table pltcl_modules (		\
 		        modname	name,				\
-			modseq	int2,				\
 			modsrc	text);"]
 	    } msg]} {
 	    puts stderr "Error creating table pltcl_modules"
@@ -425,47 +424,29 @@ proc __PLTcl_loadmod_load_modules {conn} {
     set errors 0
 
     foreach modname $modlist {
-	set xname [__PLTcl_loadmod_quote $modname]
-
         pg_result [pg_exec $conn "begin;"] -clear
 
 	pg_result [pg_exec $conn 				\
-		"delete from pltcl_modules where modname = '$xname'"] -clear
+		{delete from pltcl_modules where modname = $1} $modname] -clear
 	pg_result [pg_exec $conn 				\
-		"delete from pltcl_modfuncs where modname = '$xname'"] -clear
+		{delete from pltcl_modfuncs where modname = $1} $modname] -clear
 
 	foreach func $funcs($modname) {
-	    set xfunc [__PLTcl_loadmod_quote $func]
 	    pg_result [							\
-	        pg_exec $conn "insert into pltcl_modfuncs values (	\
-			'$xfunc', '$xname')"				\
+	        pg_exec $conn {insert into pltcl_modfuncs values ($1, $2)} \
+			  $func $modname				\
 	    ] -clear
 	}
-	set i 0
 	set srctext $modsrc($modname)
-	while {[string compare $srctext ""] != 0} {
-	    set xpart [string range $srctext 0 3999]
-	    set xpart [__PLTcl_loadmod_quote $xpart]
-	    set srctext [string range $srctext 4000 end]
-
-	    pg_result [							\
-		pg_exec $conn "insert into pltcl_modules values (	\
-			'$xname', $i, '$xpart')"			\
-	    ] -clear
-	    incr i
-	}
-
-        pg_result [pg_exec $conn "commit;"] -clear
-
-	puts "Successfully loaded/updated module $modname"
+	pg_result [							\
+	    pg_exec $conn {insert into pltcl_modules values ($1, $2)}	\
+		    $modname $modsrc($modname)
+	] -clear
     }
-}
 
+    pg_result [pg_exec $conn "commit;"] -clear
 
-proc __PLTcl_loadmod_quote {s} {
-    regsub -all {\\} $s {\\\\} s
-    regsub -all {'}  $s {''} s
-    return $s
+    puts "Successfully loaded/updated module $modname"
 }
 
 

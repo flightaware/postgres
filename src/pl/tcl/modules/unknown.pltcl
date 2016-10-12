@@ -14,9 +14,8 @@ proc unknown {proname args} {
 		"select modname from pltcl_modfuncs		\
 		 where funcname = \$1" name]
         set p_src [spi_prepare					\
-		"select modseq, modsrc from pltcl_modules	\
-		 where modname = \$1				\
-		 order by modseq" name]
+		"select modsrc from pltcl_modules	\
+		 where modname = \$1" name]
     }
 
     #-----------------------------------------------------------
